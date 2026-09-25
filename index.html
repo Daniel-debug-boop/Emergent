@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>EMERGENT — Living World</title>
+<style>
+:root{--panel:rgba(8,14,22,.78);--line:rgba(255,255,255,.12);--text:#eef5ff;--muted:#aebdd0;--accent:#ffd36b}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#071018;color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif;touch-action:none}
+#game-canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;z-index:5;left:12px;top:12px;width:min(430px,calc(100vw - 24px));pointer-events:none}
+.panel{background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(10px);border-radius:14px;box-shadow:0 8px 35px rgba(0,0,0,.22)}
+.top{padding:11px 13px}.brand{font-size:13px;letter-spacing:.16em;font-weight:800}.sub{color:var(--muted);font-size:11px;margin-top:2px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}.pill{border-radius:999px;padding:3px 8px;background:rgba(255,255,255,.08);font-size:11px}.gold{color:var(--accent)}
+#objective{margin-top:9px;font-size:13px;line-height:1.35}.hint{margin-top:8px;color:var(--muted);font-size:11px;line-height:1.4}
+#right{position:fixed;right:12px;top:12px;z-index:6;text-align:right}.clock{font-weight:700;font-size:13px}.location{color:var(--muted);font-size:11px;margin-top:3px}
+.hide{display:none!important}#toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,16px);opacity:0;z-index:20;padding:10px 14px;background:rgba(7,12,18,.88);border:1px solid var(--line);border-radius:10px;transition:.18s;font-size:12px;pointer-events:none}.show{opacity:1!important;transform:translate(-50%,0)!important}
+#debug{position:fixed;right:12px;top:78px;display:none;z-index:7;background:rgba(5,8,12,.84);padding:10px;border:1px solid var(--line);border-radius:10px;color:#b8d7ff;font:11px/1.45 ui-monospace,monospace;min-width:250px}#debug.show{display:block}
+#controls{position:fixed;z-index:8;right:12px;bottom:12px;display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;max-width:330px}.btn{pointer-events:auto;border:1px solid var(--line);background:rgba(8,14,22,.74);color:var(--text);border-radius:9px;padding:8px 10px;font-size:11px}.btn:active{transform:scale(.97)}
+#touch{position:fixed;left:14px;bottom:18px;z-index:10;display:none}.stick{width:114px;height:114px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid var(--line);position:relative}.knob{position:absolute;left:50%;top:50%;width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.25);transform:translate(-50%,-50%)}#touchBtns{position:fixed;right:14px;bottom:20px;z-index:10;display:none;gap:10px}.round{width:58px;height:58px;border-radius:50%;padding:0;display:grid;place-items:center;font-weight:700}
+#start{position:fixed;inset:0;z-index:30;display:grid;place-items:center;background:radial-gradient(circle at 50% 42%,#223d55 0%,#071018 64%);padding:22px}.start-card{max-width:520px;padding:24px;text-align:left}.start-card h1{margin:0;font-size:30px;letter-spacing:.12em}.start-card p{color:var(--muted);line-height:1.55}.start-card .cta{margin-top:16px}.start-card .btn{font-size:13px;padding:11px 14px;background:#d89d48;color:#15100a;border-color:transparent}
+#saveState{color:var(--muted);font-size:10px}
+@media(max-width:800px){#touch,#touchBtns{display:block}#controls{bottom:10px;right:10px;max-width:270px}.btn{padding:7px 9px}#hud{left:8px;top:8px;width:min(360px,calc(100vw - 16px))}.hint{display:none}}
+</style>
+</head>
+<body>
+<div id="loading" class="hide">Loading…</div><noscript><div style="padding:24px;color:white;background:#071018">EMERGENT requires JavaScript and WebGL2.</div></noscript>
+<div id="start"><div class="start-card panel"><h1>EMERGENT</h1><p>A persistent procedural city and wilderness simulation. Explore, discover districts, interact with businesses, and complete deliveries that are created from the living world's state.</p><div class="sub">REAL WEBGL2 · PROCEDURAL 3D · ADAPTIVE COMPUTATION · SAVE/LOAD</div><div class="cta"><button id="startBtn" class="btn">ENTER WORLD</button></div></div></div>
+<div id="hud"><div class="panel top"><div class="brand">EMERGENT // LIVING WORLD</div><div class="sub">Procedural open-world game</div><div class="row"><span id="cash" class="pill gold">$0</span><span id="energy" class="pill">Energy 100</span><span id="discoveries" class="pill">Discoveries 0/0</span><span id="modePill" class="pill">ADAPTIVE · HIGH</span></div><div id="objective"></div><div class="hint">WASD / arrows move · Shift sprint · mouse look · E interact · T renderer · Q quality · V camera · F2 save · F3 load · D telemetry · N new world</div><div id="saveState"></div></div></div>
+<div id="right"><div id="clock" class="clock">--:--</div><div id="location" class="location">Loading</div></div>
+<div id="toast"></div><div id="debug"></div>
+<div id="controls"><button id="saveBtn" class="btn">SAVE</button><button id="loadBtn" class="btn">LOAD</button><button id="newBtn" class="btn">NEW WORLD</button><button id="rendererBtn" class="btn">RENDERER</button><button id="qualityBtn" class="btn">QUALITY</button><button id="cameraBtn" class="btn">CAMERA</button></div>
+<div id="touch"><div id="stick" class="stick"><div id="knob" class="knob"></div></div></div>
+<div id="touchBtns"><button id="touchSprint" class="btn round">RUN</button><button id="touchInteract" class="btn round">E</button></div>
+<script type="module" src="game3d.js"></script>
+</body>
+</html>

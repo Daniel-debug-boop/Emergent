@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { generateWorld, terrainHeight } from './world.mjs';
+const a = generateWorld(173927);
+const b = generateWorld(173927);
+assert.deepEqual(a.regions, b.regions);
+assert.deepEqual(a.roads, b.roads);
+assert.deepEqual(a.buildings, b.buildings);
+assert.deepEqual(a.businesses, b.businesses);
+assert.deepEqual(a.npcs, b.npcs);
+assert.deepEqual(a.cars, b.cars);
+assert.notDeepEqual(a.buildings, generateWorld(173928).buildings);
+assert(a.regions.length === 64);
+assert(a.buildings.length > 200);
+assert(a.npcs.length === 520);
+assert(a.cars.length === 150);
+assert(a.businesses.length > 20);
+for (const p of [[0,0],[2400,2400],[4800,4800],[9200,9200]]) assert(Number.isFinite(terrainHeight(p[0],p[1],173927)));
+console.log(JSON.stringify({ok:true,regions:a.regions.length,districts:a.districts.length,roads:a.roads.length,buildings:a.buildings.length,trees:a.trees.length,businesses:a.businesses.length,npcs:a.npcs.length,cars:a.cars.length}));
