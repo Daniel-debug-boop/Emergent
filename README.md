@@ -5,10 +5,15 @@ EMERGENT is the evolved version of the original playable 2D procedural prototype
 ## Run
 
 ```bash
-./run.sh
+./run.sh          # or: npm run dev
 ```
 
-Then open the printed local URL in a WebGL2-capable browser. `run.sh` uses Python's static HTTP server, so no npm install is required.
+Then open the printed local URL in a WebGL2-capable browser. The project has no
+runtime dependencies and no install step; `tools/serve.mjs` is a dependency-free
+static server that binds `0.0.0.0` on `$PORT` (default 8765).
+
+For a production build, `npm run build` assembles `dist/` from an explicit file
+manifest and writes `dist/build.json`.
 
 ## Player loop
 
@@ -60,7 +65,15 @@ Auto-save occurs periodically and is also available through `F2` / `F3` or the H
 
 ## Benchmark
 
-Use the actual game page with:
+The fastest reproducible measurement runs the real game headlessly, in Node, with
+no browser:
+
+```bash
+npm run bench
+npm run bench:adaptive
+```
+
+For on-device numbers, use the actual game page with:
 
 - `?benchmark=standard&seed=173927&quality=HIGH`
 - `?benchmark=adaptive&seed=173927&quality=HIGH`
@@ -71,21 +84,39 @@ Reported measurements include FPS, CPU-side render wall time, dynamic-buffer bui
 
 GPU time and VRAM are not fabricated. They require a trustworthy browser/GPU measurement path on the target device.
 
-See `benchmark.md` for the reproducible procedure and `FINAL_SCORECARD.md` for the completion audit.
+See `benchmark.md` for the reproducible procedure and measured container results, and `FINAL_SCORECARD.md` for the completion audit.
 
 ## Engineering verification
 
 ```bash
-npm test
-npm run check
-node test_project.mjs
+npm test          # everything below
+npm run check     # syntax check
 ```
 
-These tests cover deterministic world reproduction, required world populations, required renderer/game systems in the source, HTML/JS references, and finite terrain sampling.
+| Suite | Command | What it proves |
+|---|---|---|
+| World | `npm run test:world` | Generation is deterministic per seed and varies across seeds; required populations exist |
+| Math | `npm run test:math` | Projection, view, multiply and point-transform algebra, including degenerate cases |
+| Project | `npm run test:project` | Required renderer/simulation systems exist in source, HTML wiring is intact, terrain is finite |
+| Tooling | `npm run test:tooling` | Static server rejects path traversal and serves correct MIME types; the build emits every file the page needs |
+| Runtime | `npm run test:runtime` | The real game boots and runs its real frame loop for hundreds of frames |
+
+The runtime suite is the important one: it imports `game3d.js` unmodified and
+executes its actual frame loop, simulation, streaming and WebGL draw calls inside
+Node against a validating GL surface. It fails on a thrown frame, a WebGL
+validation error, non-finite geometry uploaded to a buffer, a draw call that
+reads past the end of a buffer, a uniform set on the wrong program, a broken
+mission delivery flow, a save/load that does not round-trip, or a GL entry point
+the harness does not model (so the harness cannot silently stop verifying
+something). It covers boot, a long run, keyboard movement, streaming under
+teleport, every quality level, both renderer modes, a full delivery mission, and
+save/load including rejection of a save from a different world.
 
 ## Current limitations
 
 The game remains intentionally stylized and low-poly. The strongest remaining technical gaps are full navmesh/pathfinding, more sophisticated intersection traffic logic, true GPU-time instrumentation, advanced PBR materials/reflections, interior traversal, and pixel-level temporal reprojection. Those are not represented as completed features.
+
+On-device FPS, GPU time and VRAM are still unmeasured: the runtime is verified headlessly, but a real GPU measurement path must be validated on the target device before any of those numbers are quoted.
 
 
 ## Native dependency policy
