@@ -56,9 +56,10 @@ await test('rejects path traversal outside the project root', async () => {
 
 await test('returns null for files that do not exist', async () => {
   assert.equal(await resolveFile('/nope.js'), null);
+  // `docs/` is checked into the repo and has no index.html, so this holds on a
+  // clean checkout. Deliberately not `dist/`: that directory only exists after
+  // the build test runs, and asserting on it would make this order-dependent.
   assert.equal(await resolveFile('/docs'), null, 'a directory without index.html is not served');
-  assert.equal(await resolveFile('/dist'), path.join(ROOT, 'dist', 'index.html'),
-    'a directory with an index.html is served from that index');
 });
 
 await test('the build emits exactly the runtime files the page needs', async () => {
