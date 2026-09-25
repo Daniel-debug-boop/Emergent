@@ -40,7 +40,15 @@ bool VulkanBackend::initialize(){
     VkDevice device=VK_NULL_HANDLE; r=vkCreateDevice(physical,&dci,nullptr,&device); if(r!=VK_SUCCESS){caps_.error="vkCreateDevice failed: "+std::to_string(r); shutdown(); return false;}
     volkLoadDevice(device); device_=device; caps_.device=true; vkGetDeviceQueue(device,family,0,reinterpret_cast<VkQueue*>(&queue_)); caps_.queue=true; caps_.compute=true; caps_.transfer=true;
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,nullptr,VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,family}; VkCommandPool pool=VK_NULL_HANDLE; r=vkCreateCommandPool(device,&pci,nullptr,&pool); if(r!=VK_SUCCESS){caps_.error="vkCreateCommandPool failed: "+std::to_string(r); shutdown(); return false;} command_pool_=pool;
-    VmaAllocatorCreateInfo vaci{}; vaci.vulkanApiVersion=VK_API_VERSION_1_3; vaci.physicalDevice=physical; vaci.device=device; vaci.instance=instance; VmaAllocator allocator=VK_NULL_HANDLE; r=vmaCreateAllocator(&vaci,&allocator); if(r!=VK_SUCCESS){caps_.error="vmaCreateAllocator failed: "+std::to_string(r); shutdown(); return false;} allocator_=allocator;
+    VmaAllocatorCreateInfo vaci{}; vaci.vulkanApiVersion=VK_API_VERSION_1_3; vaci.physicalDevice=physical; vaci.device=device; vaci.instance=instance;
+    // EMERGENT builds VMA with dynamic Vulkan functions, so it holds no static
+    // binding of its own. Hand it the dispatch tables volk already resolved;
+    // vmaCreateAllocator copies the pointers, so a stack local is sufficient.
+    VmaVulkanFunctions vulkanFunctions{};
+    r = vmaImportVulkanFunctionsFromVolk(&vaci, &vulkanFunctions);
+    if (r != VK_SUCCESS) { caps_.error = "vmaImportVulkanFunctionsFromVolk failed: " + std::to_string(r); shutdown(); return false; }
+    vaci.pVulkanFunctions = &vulkanFunctions;
+    VmaAllocator allocator=VK_NULL_HANDLE; r=vmaCreateAllocator(&vaci,&allocator); if(r!=VK_SUCCESS){caps_.error="vmaCreateAllocator failed: "+std::to_string(r); shutdown(); return false;} allocator_=allocator;
     caps_.indirect_draw=true;
     initialized_=true; return true;
 }
@@ -60,9 +68,19 @@ NativeGpuRenderStats VulkanBackend::renderBootstrap(uint32_t width,uint32_t heig
 
 void VulkanBackend::shutdown(){
     if(allocator_){vmaDestroyAllocator(asAllocator(allocator_)); allocator_=nullptr;}
-    if(device_ && command_pool_) vkDestroyCommandPool(asDevice(device_),asPool(command_pool_),nullptr);
-    command_pool_=nullptr;
-    if(device_) vkDestroyDevice(asDevice(device_),nullptr); device_=nullptr; queue_=nullptr;
-    if(instance_) vkDestroyInstance(asInstance(instance_),nullptr); instance_=nullptr; physical_device_=nullptr; initialized_=false; caps_={};
+    if (device_ && command_pool_) vkDestroyCommandPool(asDevice(device_), asPool(command_pool_), nullptr);
+    command_pool_ = nullptr;
+    if (device_) {
+        vkDestroyDevice(asDevice(device_), nullptr);
+        device_ = nullptr;
+        queue_ = nullptr;
+    }
+    if (instance_) {
+        vkDestroyInstance(asInstance(instance_), nullptr);
+        instance_ = nullptr;
+    }
+    physical_device_ = nullptr;
+    initialized_ = false;
+    caps_ = {};
 }
-}
+} // namespace emergent

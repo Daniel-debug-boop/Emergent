@@ -1,6 +1,16 @@
 # Build output
 dist/
 
+# Native build output and pinned upstream source trees.
+# third_party/ holds the upstream libraries the native engine builds against
+# (Jolt, Recast/Detour, Volk, VMA, meshoptimizer, Flecs, miniaudio, ozz). They
+# are pinned by revision, not vendored: the repository depends on them, and CI
+# clones them explicitly. Committing them would add hundreds of megabytes of
+# third-party code to the history.
+third_party/
+build/
+build-native/
+
 # Dependencies
 node_modules/
 

@@ -17,7 +17,7 @@
 | Performance | Player-centered streaming, spatial collision index, O(1) mission lookups, adaptive dynamic-buffer update period, importance-driven NPC reuse, quality levels | Measured headlessly (STANDARD 1737 ms vs ADAPTIVE 974 ms for 300 frames); on-device FPS still unverified |
 | Adaptive rendering | STANDARD vs ADAPTIVE; distance/motion/weather/importance; temporal reuse of dynamic representations | Real selective 3D recomputation; not pixel-level temporal reprojection |
 | Streaming | Render geometry rebuilt around player cells; detail varies with quality and distance | Strong render streaming; full data unloading/abstract simulation is not yet implemented |
-| Stability | Real game frame loop executed headlessly against a validating WebGL2 surface (8 tests / 78 assertions), plus math, world, project and tooling suites | Crashes, validation errors, NaN geometry and broken mission/save flows now fail the build; a real GPU device is still untested |
+| Stability | Real game frame loop executed headlessly against a validating WebGL2 surface (8 tests / 78 assertions); native engine compiled, linked and behaviour-tested (Jolt 22 assertions, ctest 3/3) | Crashes, validation errors, NaN geometry and broken mission/save flows now fail the build; a real GPU device is still untested |
 | Save/load | Player, mission, events, discoveries, business state, NPC state, world clock/economy/weather persisted | Strong localStorage persistence; cloud/slot management is not included |
 | Overall polish | Coherent gameplay loop, UI, controls, audio ambience, progression and isolated developer telemetry | A polished research-game vertical slice within the current constraints; not AAA content/asset quality |
 
@@ -28,6 +28,14 @@ Passing commands:
 ```bash
 npm test          # world + math + project + tooling + runtime suites
 npm run check     # syntax check
+
+# native (requires the pinned upstream trees; see docs/ENGINE_VERIFICATION.md)
+cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DEMERGENT_JOLT_DIR=... -DEMERGENT_MESHOPTIMIZER_DIR=... -DEMERGENT_RECAST_DIR=... \
+  -DEMERGENT_VOLK_DIR=... -DEMERGENT_VMA_DIR=... -DEMERGENT_FLECS_DIR=... \
+  -DEMERGENT_MINIAUDIO_DIR=... -DEMERGENT_OZZ_DIR=...
+cmake --build build/native --target emergent_native emergent_benchmark
+ctest --test-dir build/native --output-on-failure
 ```
 
 `npm test` runs five suites in roughly ten seconds: deterministic world
@@ -35,11 +43,16 @@ generation, matrix/projection algebra, project wiring, preview-server and build
 tooling, and a runtime suite that boots the **unmodified** game and executes its
 real frame loop, simulation, streaming and WebGL draw calls inside Node.
 
-The runtime suite is what makes the previous "browser WebGL2 could not be
-executed" limitation narrower rather than absent: the renderer now provably
-issues well-formed draw calls against in-range buffers with finite vertex data,
-compiles and links its programs, and runs hundreds of frames of simulation
-without a thrown frame. What it cannot prove is anything about a real GPU.
+The native side is no longer a source tree of unbuilt code. `emergent_native`
+compiles and links against all eight pinned upstream libraries and runs:
+meshoptimizer, Flecs and miniaudio report active at runtime, and Jolt reports
+`first_dynamic_y=0.48` for a body seeded at `y=4.0` that fell under gravity and
+came to rest. `ctest` passes 3/3, including a 22-assertion Jolt behaviour test.
+Building it exposed four defects that had been invisible precisely because
+nothing had ever compiled it — a CMake tag that does not exist upstream, Jolt
+added from the wrong directory, a meshoptimizer API change, and a Recast API
+removal — plus a VMA instantiation that was never provided at all. See
+`docs/ENGINE_VERIFICATION.md`.
 
 Measured CPU-side world-generation and headless benchmark timings are recorded in
 `benchmark.md`.
