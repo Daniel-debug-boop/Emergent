@@ -1,0 +1,82 @@
+name: Native
+
+# The native tree is C++ against pinned upstream libraries (Jolt, Recast/Detour,
+# Volk, VMA, meshoptimizer, Flecs, miniaudio, ozz). For a long stretch it was
+# never compiled at all: the sources were syntactically plausible but had real
+# API errors that only appeared once a compiler was pointed at them, and a
+# CMake tag (`1.4.328`) that does not exist upstream. This job keeps that from
+# silently rotting again.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'native/**'
+      - '.github/workflows/native.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'native/**'
+      - '.github/workflows/native.yml'
+
+jobs:
+  native:
+    name: Build and test native engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libvulkan-dev
+
+      # ozz requires CMake >= 3.30; distribution packages trail that (Ubuntu
+      # 22.04 ships 3.22). Pin the toolchain explicitly rather than depending on
+      # whatever the runner image happens to provide.
+      - name: Install CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.30.5'
+
+      # Pinned upstream trees, cloned at the exact revisions CMakeLists expects.
+      # Kept out of git; the repository depends on them, it does not vendor them.
+      - name: Fetch pinned upstream dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p third_party
+          fetch() { git clone --depth 1 --branch "$2" "$3" "third_party/$1"; }
+          fetch JoltPhysics            v5.6.0            https://github.com/jrouwe/JoltPhysics.git
+          fetch meshoptimizer          v1.2              https://github.com/zeux/meshoptimizer.git
+          fetch recastnavigation       v1.6.0            https://github.com/recastnavigation/RecastNavigation.git
+          # Volk tags releases vulkan-sdk-<version>; a bare 1.4.328 does not exist.
+          fetch volk                   vulkan-sdk-1.4.328.0 https://github.com/zeux/volk.git
+          fetch VulkanMemoryAllocator  v3.3.0            https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+          fetch flecs                  v4.0.5            https://github.com/SanderMertens/flecs.git
+          fetch miniaudio              0.11.25           https://github.com/mackron/miniaudio.git
+          fetch ozz-animation          0.17.0            https://github.com/guillaumeblanc/ozz-animation.git
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/native -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEMERGENT_JOLT_DIR="$PWD/third_party/JoltPhysics" \
+            -DEMERGENT_MESHOPTIMIZER_DIR="$PWD/third_party/meshoptimizer" \
+            -DEMERGENT_RECAST_DIR="$PWD/third_party/recastnavigation" \
+            -DEMERGENT_VOLK_DIR="$PWD/third_party/volk" \
+            -DEMERGENT_VMA_DIR="$PWD/third_party/VulkanMemoryAllocator" \
+            -DEMERGENT_FLECS_DIR="$PWD/third_party/flecs" \
+            -DEMERGENT_MINIAUDIO_DIR="$PWD/third_party/miniaudio" \
+            -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation"
+
+      - name: Build
+        run: cmake --build build/native --target emergent_native emergent_benchmark emergent_physics_test
+
+      # No GPU is present on the runner, so the Vulkan backend reports
+      # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
+      # subsystems that do not need a driver. The binary is still required to
+      # link, which is what proves the VMA/volk/Flecs/Jolt integration.
+      - name: Test
+        run: ctest --test-dir build/native --output-on-failure

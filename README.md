@@ -119,6 +119,45 @@ The game remains intentionally stylized and low-poly. The strongest remaining te
 On-device FPS, GPU time and VRAM are still unmeasured: the runtime is verified headlessly, but a real GPU measurement path must be validated on the target device before any of those numbers are quoted.
 
 
-## Native dependency policy
+## Native engine
 
-The native engine is upstream-only for infrastructure that has a mature open-source implementation. Jolt Physics, meshoptimizer, Recast/Detour, Volk, Vulkan Memory Allocator and Flecs are required dependencies; the previous custom fallback implementations have been removed. The native renderer uses the real Vulkan SDK headers plus Volk and VMA. The Forge/Ozz/miniaudio/KTX/Slang/Tracy/Zstandard are not claimed as integrated until their upstream sources are supplied and wired against their real APIs.
+The native engine is upstream-only for infrastructure that has a mature open-source implementation. There are no hand-rolled replacements for physics, navigation, ECS, mesh optimisation, audio or Vulkan memory management.
+
+### What is actually built and verified
+
+`emergent_native` compiles and links against all eight pinned upstream libraries, and its behaviour is covered by `ctest`. This was verified by actually running the build, not by inspection:
+
+| Subsystem | Library | Pinned at | State |
+|---|---|---|---|
+| Rigid-body physics | Jolt Physics | `v5.6.0` | Compiled, linked, **22 behaviour tests pass** — gravity, resting contact, slab geometry, lifecycle |
+| Mesh optimisation | meshoptimizer | `v1.2` | Compiled, **runs at runtime** (`BOUNDARY_READY`) |
+| Entity-component world | Flecs | `v4.0.5` | Compiled, **runs at runtime** (`ACTIVE`, entities created and updated) |
+| Audio | miniaudio | `0.11.25` | Compiled, **engine initialises at runtime** (`ACTIVE`) |
+| Navigation | Recast/Detour | `v1.6.0` | Compiled and linked; crowd + navmesh-query boundary |
+| Vulkan loader dispatch | Volk | `vulkan-sdk-1.4.328.0` | Compiled and linked |
+| GPU memory allocation | Vulkan Memory Allocator | `v3.3.0` | Compiled and linked; VMA implementation TU + volk function import |
+| Animation runtime | ozz-animation | `0.17.0` | Libraries build, but **no code path uses it** — the linker drops it (0 ozz symbols in the binary). See below. |
+
+```
+$ ./build/native/emergent_native
+meshoptimizer: BOUNDARY_READY
+Flecs ECS: ACTIVE entities=2
+miniaudio: ACTIVE
+Jolt simulation: ACTIVE first_dynamic_y=0.48
+Native scene self-test: objects=50000 visible=35514 culled=14486 CPU_ms=0.136892
+
+$ ctest --test-dir build/native
+100% tests passed, 0 tests failed out of 3
+```
+
+`first_dynamic_y=0.48` is a real measurement: the seeded body starts at `y=4.0`, falls under gravity, and comes to rest on the ground plane at `y≈0.5`.
+
+### What is not integrated, and why
+
+- **The Forge** — not integrated. It is a full rendering framework with its own RHI, windowing and build system. EMERGENT's renderer is raw Vulkan + Volk + VMA, and swapping in The Forge would be a replacement of the renderer, not an addition to it.
+- **ozz** — its libraries build, but nothing calls them. `nm` on the linked binary reports **0 ozz symbols**: the link drops unused static archives, so ozz costs build time and contributes no code. ozz animates *authored* skeleton and clip data produced by its offline tooling, and this repository has no skeleton, no animation clips and no importer, so there is nothing to sample. It is wired into the build and ready, but it is not an integrated feature and its cost is currently pure. Removing it from `target_link_libraries` would cut build time until an asset pipeline exists.
+- **KTX, Slang, Tracy, Zstandard** — not integrated. There is no compressed-texture path, no shading-language compilation, no profiler capture layer and no compressed-save format in the tree that would use them.
+
+### Vulkan runtime status
+
+The Vulkan backend compiles, links, and is exercised for capability probing, but it cannot *execute* in a container with no GPU: there is no ICD and no `/dev/dri`, so `vkCreateInstance` correctly returns `VK_ERROR_INCOMPATIBLE_DRIVER` and the engine reports that rather than fabricating GPU work. A real GPU device is required to validate the render path.
