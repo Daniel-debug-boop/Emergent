@@ -1,4 +1,5 @@
-import { clamp, rng, hash2, fbm, terrainHeight, generateWorld, nearbyBusiness, districtAt } from './world.mjs';
+import { clamp, rng, hash2, terrainHeight, generateWorld, districtAt } from './world.mjs';
+import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 
 'use strict';
 
@@ -7,6 +8,14 @@ canvas.id = 'game-canvas';
 document.body.appendChild(canvas);
 const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
 if (!gl) throw new Error('WebGL2 unavailable');
+
+// Screen-space mission marker overlay: a 2D canvas layered above the 3D view
+// but below the HUD. It never captures input and is resized with the 3D canvas.
+const overlay = document.createElement('canvas');
+overlay.id = 'mission-overlay';
+overlay.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:4';
+document.body.appendChild(overlay);
+const overlayCtx = overlay.getContext('2d');
 
 const $ = id => document.getElementById(id);
 const MODES = ['STANDARD', 'ADAPTIVE'];
@@ -62,10 +71,11 @@ const BENCH_SEED = Number(QUERY.get('seed'));
 const BENCH_QUALITY = QUERY.get('quality');
 let benchStart = 0, benchFrames = 0, benchRenderMs = 0, benchRebuilds = 0, benchDynamicMs = 0, benchRecomputed = 0, benchReused = 0, benchVisible = 0, benchDone = false;
 let dynamicBuildTime = -Infinity, lastDynamicX = 0, lastDynamicZ = 0, dynamicBuilds = 0, lastDynamicObjects = 0;
+let lastPV = null; // Most recent view-projection matrix, shared with the 2D mission marker.
 
 const camera = { x: 4800, y: 12, z: 4800, yaw: Math.PI, pitch: -0.24 };
 const renderAgentState = new Map();
-const worldIndex = { buildings: new Map(), trees: new Map(), roads: new Map(), businesses: new Map() };
+const worldIndex = { buildings: new Map(), trees: new Map(), roads: new Map(), businesses: new Map(), businessById: new Map(), buildingById: new Map() };
 const streamResidency = { active: new Set(), chunks: new Map(), generated: 0, evicted: 0, lastBuildMs: 0 };
 
 function chunkKey(cx, cz) { return `${cx},${cz}`; }
@@ -131,16 +141,24 @@ function beep(freq = 440, duration = 0.08) {
   g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration); o.stop(audioCtx.currentTime + duration);
 }
 
+// Facade palettes, resolved once at module scope. Keeping this out of
+// colorForBuilding avoids rebuilding the table for every building on every
+// static-scene rebuild, and makes the palette a single shared constant.
+const FACADE_PALETTE = Object.freeze({
+  house: [[0.54,0.43,0.34],[0.42,0.33,0.28],[0.62,0.56,0.45]],
+  shop: [[0.52,0.34,0.19],[0.68,0.50,0.27],[0.42,0.38,0.34]],
+  tower: [[0.32,0.38,0.46],[0.43,0.46,0.52],[0.27,0.31,0.37]],
+  warehouse: [[0.34,0.37,0.34],[0.43,0.40,0.35],[0.29,0.34,0.33]]
+});
+
 function colorForBuilding(b) {
-  const palette = {
-    house: [[0.54,0.43,0.34],[0.42,0.33,0.28],[0.62,0.56,0.45]],
-    shop: [[0.52,0.34,0.19],[0.68,0.50,0.27],[0.42,0.38,0.34]],
-    tower: [[0.32,0.38,0.46],[0.43,0.46,0.52],[0.27,0.31,0.37]],
-    warehouse: [[0.34,0.37,0.34],[0.43,0.40,0.35],[0.29,0.34,0.33]]
-  };
-  const p = palette[b.kind] || palette.house;
-  const t = b.facade % p.length;
-  return p[t].map(v => clamp(v + (b.seed - 0.5) * 0.07, 0.15, 0.85));
+  const p = FACADE_PALETTE[b.kind] || FACADE_PALETTE.house;
+  // b.facade is a uniform float in [0,1); scale it into the palette range and
+  // floor it. A bare `% p.length` would index with a fraction and yield
+  // undefined, which is a hard crash on the very first building.
+  const t = Math.min(p.length - 1, Math.floor(b.facade * p.length));
+  const skew = (b.seed - 0.5) * 0.07;
+  return [clamp(p[t][0] + skew, 0.15, 0.85), clamp(p[t][1] + skew, 0.15, 0.85), clamp(p[t][2] + skew, 0.15, 0.85)];
 }
 
 function pushV(arr, p, n, c) { arr.push(p[0],p[1],p[2], n[0],n[1],n[2], c[0],c[1],c[2]); }
@@ -176,13 +194,17 @@ function pushCylinder(arr,x,y,z,r,h,color,segments=8) {
 function pushLowPolyTree(arr,x,y,z,s,type,seed) {
   const trunk=[0.25,0.16,0.09]; pushCylinder(arr,x,y,z,0.18*s,1.7*s,trunk,6);
   const base = type==='pine'?[0.08,0.25,0.13]:type==='broadleaf'?[0.14,0.36,0.19]:[0.10,0.31,0.15];
-  const variation=0.8+(seed%0.4);
+  // Per-tree brightness variation in [0.85, 1.15], derived from the tree's
+  // own seed so the canopy reads as varied but stays deterministic.
+  const variation=0.85+((seed*0.3)%0.3);
+  const tint=(v,k=1)=>clamp(v*variation*k,0.05,1);
+  const canopy=[tint(base[0]),tint(base[1]),tint(base[2])];
   if(type==='pine'){
-    pushCylinder(arr,x,y+0.8*s,z,0.9*s,2.2*s,base,7);
-    pushCylinder(arr,x,y+1.8*s,z,0.62*s,1.9*s,[base[0]*1.12,base[1]*1.12,base[2]*1.12],7);
+    pushCylinder(arr,x,y+0.8*s,z,0.9*s,2.2*s,canopy,7);
+    pushCylinder(arr,x,y+1.8*s,z,0.62*s,1.9*s,[tint(base[0],1.12),tint(base[1],1.12),tint(base[2],1.12)],7);
   } else {
-    pushCylinder(arr,x,y+1.0*s,z,0.92*s,1.35*s,base,7);
-    pushCylinder(arr,x+0.28*s,y+1.6*s,z-0.16*s,0.68*s,1.0*s,[base[0]*1.08,base[1]*1.08,base[2]*1.08],7);
+    pushCylinder(arr,x,y+1.0*s,z,0.92*s,1.35*s,canopy,7);
+    pushCylinder(arr,x+0.28*s,y+1.6*s,z-0.16*s,0.68*s,1.0*s,[tint(base[0],1.08),tint(base[1],1.08),tint(base[2],1.08)],7);
   }
 }
 
@@ -237,20 +259,27 @@ function pushStreetFurniture(arr,x,z,detail) {
   if(detail>0.8) pushBox(arr,x,y+1.2,z,0.8,0.5,0.16,[0.20,0.20,0.18]);
 }
 
-function pushNpc(arr,n,detail) {
-  const y=terrainHeight(n.x,n.z,seed);
-  const skin=[0.56+0.12*(n.id%4)/3,0.36+0.14*(n.id%5)/4,0.25+0.16*(n.id%3)/2];
-  const shirt=n.job==='worker'?[0.72,0.46,0.28]:n.job==='merchant'?[0.32,0.55,0.72]:n.job==='service'?[0.30,0.63,0.45]:[0.54,0.39,0.67];
-  const bob=Math.sin(elapsed*6+n.id)*0.025*(n.activity==='travel'?1:0.2);
-  pushBox(arr,n.x,y+bob,n.z,0.62,1.10,0.40,shirt,shirt);
-  pushCylinder(arr,n.x,y+1.1+bob,n.z,0.23,0.48,skin,7);
+/**
+ * Append a low-poly character to `arr`.
+ * Takes the fields it needs by value rather than an NPC object: the adaptive
+ * renderer rebuilds this for every visible resident many times a second, and
+ * spreading a whole NPC (identity, schedule, memory array) to supply five
+ * scalars allocated a throwaway object per agent per rebuild.
+ */
+function pushNpc(arr,x,z,id,job,activity,detail) {
+  const y=terrainHeight(x,z,seed);
+  const skin=[0.56+0.12*(id%4)/3,0.36+0.14*(id%5)/4,0.25+0.16*(id%3)/2];
+  const shirt=job==='worker'?[0.72,0.46,0.28]:job==='merchant'?[0.32,0.55,0.72]:job==='service'?[0.30,0.63,0.45]:[0.54,0.39,0.67];
+  const bob=Math.sin(elapsed*6+id)*0.025*(activity==='travel'?1:0.2);
+  pushBox(arr,x,y+bob,z,0.62,1.10,0.40,shirt,shirt);
+  pushCylinder(arr,x,y+1.1+bob,z,0.23,0.48,skin,7);
   if(detail>0.35){
     const leg= [0.12,0.13,0.15];
-    pushBox(arr,n.x-0.17,y-0.02,n.z,0.16,0.55,0.28,leg,leg);
-    pushBox(arr,n.x+0.17,y-0.02,n.z,0.16,0.55,0.28,leg,leg);
+    pushBox(arr,x-0.17,y-0.02,z,0.16,0.55,0.28,leg,leg);
+    pushBox(arr,x+0.17,y-0.02,z,0.16,0.55,0.28,leg,leg);
     if(detail>0.65){
-      pushBox(arr,n.x-0.40,y+0.62+bob,n.z,0.14,0.55,0.14,shirt,shirt);
-      pushBox(arr,n.x+0.40,y+0.62+bob,n.z,0.14,0.55,0.14,shirt,shirt);
+      pushBox(arr,x-0.40,y+0.62+bob,z,0.14,0.55,0.14,shirt,shirt);
+      pushBox(arr,x+0.40,y+0.62+bob,z,0.14,0.55,0.14,shirt,shirt);
     }
   }
 }
@@ -308,9 +337,8 @@ gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12);
 gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24);
 gl.bindVertexArray(null);
 
-function matrixPerspective(fovy,aspect,near,far){const f=1/Math.tan(fovy/2),nf=1/(near-far);return new Float32Array([f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*nf,-1,0,0,2*far*near*nf,0]);}
-function lookAt(eye,target){let zx=eye[0]-target[0],zy=eye[1]-target[1],zz=eye[2]-target[2],l=Math.hypot(zx,zy,zz)||1;zx/=l;zy/=l;zz/=l;let xx=zz,xy=0,xz=-zx;l=Math.hypot(xx,xz)||1;xx/=l;xz/=l;let yx=zy*xz-zz*xy,yy=zz*xx-zx*xz,yz=zx*xy-zy*xx;return new Float32Array([xx,yx,zx,0,xy,yy,zy,0,xz,yz,zz,0,-(xx*eye[0]+xy*eye[1]+xz*eye[2]),-(yx*eye[0]+yy*eye[1]+yz*eye[2]),-(zx*eye[0]+zy*eye[1]+zz*eye[2]),1]);}
-function mul(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o;}
+// Matrix math (perspective, look-at, multiply, point transform) lives in
+// math3d.mjs so it can be unit-tested independently of the GL runtime.
 
 function sunState(){
   const theta=(world.time/24)*Math.PI*2-Math.PI*0.5;
@@ -320,13 +348,18 @@ function sunState(){
 }
 
 function buildWorldIndex() {
-  worldIndex.buildings.clear(); worldIndex.trees.clear(); worldIndex.roads.clear(); worldIndex.businesses.clear();
+  worldIndex.buildings.clear(); worldIndex.trees.clear(); worldIndex.roads.clear();
+  worldIndex.businesses.clear(); worldIndex.businessById.clear(); worldIndex.buildingById.clear();
   const cell=480;
   const add=(map,obj,x,z)=>{const k=`${Math.floor(x/cell)},${Math.floor(z/cell)}`;let a=map.get(k);if(!a)map.set(k,a=[]);a.push(obj);};
-  for(const b of world.buildings) add(worldIndex.buildings,b,b.x,b.z);
+  for(const b of world.buildings){ add(worldIndex.buildings,b,b.x,b.z); worldIndex.buildingById.set(b.id,b); }
   for(const t of world.trees) add(worldIndex.trees,t,t.x,t.z);
   for(const r of world.roads) add(worldIndex.roads,r,r.x+r.w/2,r.z+r.d/2);
-  for(const b of world.businesses){ const building=world.buildings[b.buildingId]; if(building) add(worldIndex.businesses,b,building.x,building.z); }
+  for(const b of world.businesses){
+    const building=world.buildings[b.buildingId];
+    worldIndex.businessById.set(b.id,b);
+    if(building) add(worldIndex.businesses,b,building.x,building.z);
+  }
 }
 
 function cellsInRadius(x,z,r){const cell=480,cx=Math.floor(x/cell),cz=Math.floor(z/cell),n=Math.ceil(r/cell);const out=[];for(let yy=cz-n;yy<=cz+n;yy++)for(let xx=cx-n;xx<=cx+n;xx++)out.push([xx,yy]);return out;}
@@ -338,9 +371,12 @@ function terrainChunk(arr,cx,cz,radius,detail){
   for(let z=0;z<size;z+=step) for(let x=0;x<size;x+=step){
     const x0=minX+x,z0=minZ+z,x1=Math.min(minX+x+step,cx+radius),z1=Math.min(minZ+z+step,cz+radius);
     const y00=terrainHeight(x0,z0,seed),y10=terrainHeight(x1,z0,seed),y11=terrainHeight(x1,z1,seed),y01=terrainHeight(x0,z1,seed);
-    const avg=(y00+y10+y11+y01)/4;
-    const reg=world.regions[Math.max(0,Math.min(63,Math.floor(clamp((avg===avg?z0:0),0,9599)/1200)*8+Math.floor(clamp(x0,0,9599)/1200)))];
-    const c=reg?.biome==='lush'?[0.16,0.32,0.16]:reg?.biome==='dry'?[0.36,0.30,0.18]:[0.22,0.36,0.23];
+    // Region lookup only depends on the quad origin, and terrainHeight is
+    // finite for any input, so the corner clamping is enough.
+    const rx=Math.max(0,Math.min(7,Math.floor(clamp(x0,0,9599)/1200)));
+    const rz=Math.max(0,Math.min(7,Math.floor(clamp(z0,0,9599)/1200)));
+    const biome=world.regions[rz*8+rx]?.biome;
+    const c=biome==='lush'?[0.16,0.32,0.16]:biome==='dry'?[0.36,0.30,0.18]:[0.22,0.36,0.23];
     pushQuad(arr,[x0,y00,z0],[x1,y10,z0],[x1,y11,z1],[x0,y01,z1],[0,1,0],c);
   }
 }
@@ -356,6 +392,9 @@ function buildStaticScene() {
   const activeChunks = refreshStreamResidency(radius);
   const addCellObjects=(kind, cb)=>{for(const key of activeChunks){const list=streamResidency.chunks.get(key)?.[kind];if(!list)continue;for(const o of list)cb(o);}};
   const minX=player.x-radius,maxX=player.x+radius,minZ=player.z-radius,maxZ=player.z+radius;
+  // Sun state is fixed for the duration of a static build, so resolve it once
+  // instead of recomputing trig per building.
+  const sun=sunState(), castShadows=sun.day>0.08, sx=sun.dir[0], sy=Math.max(0.2,sun.dir[1]), sz=sun.dir[2];
   addCellObjects('roads',r=>{
     if(r.x+r.w<minX||r.x>maxX||r.z+r.d<minZ||r.z>maxZ)return; pushRoad(arr,r);
   });
@@ -365,8 +404,8 @@ function buildStaticScene() {
     pushBuilding(arr,b,detail);
     if(detail>0.72 && (b.id%3===0)) pushStreetFurniture(arr,b.x+b.w*0.7,b.z+b.d*0.7,detail);
     // Project a simple soft sun shadow on the local terrain; geometry, not a screen-space fake.
-    if(d<720 && sunState().day>0.08) {
-      const s=sunState(), sx=s.dir[0], sy=Math.max(0.2,s.dir[1]), sz=s.dir[2], ext=b.h/Math.max(0.18,sy);
+    if(d<720 && castShadows) {
+      const ext=b.h/Math.max(0.18,sy);
       const ox=-sx*ext*0.65, oz=-sz*ext*0.65;
       const x0=b.x-b.w*.46+ox, x1=b.x+b.w*.46+ox, z0=b.z-b.d*.46+oz, z1=b.z+b.d*.46+oz;
       const y0=terrainHeight(x0,z0,seed)+0.045, y1=terrainHeight(x1,z0,seed)+0.045, y2=terrainHeight(x1,z1,seed)+0.045, y3=terrainHeight(x0,z1,seed)+0.045;
@@ -418,13 +457,13 @@ function buildDynamicScene(force=false) {
     const imp=importanceOf(n), st=ensureAgentState(n.id,n);
     const interval=adaptive?(imp>0.68?0.045:imp>0.42?0.12:imp>0.20?0.24:0.42):0.016;
     if(elapsed>=st.next){st.x=n.x;st.z=n.z;st.next=elapsed+interval;recomputed++;}else reused++;
-    pushNpc(arr,{...n,x:st.x,z:st.z},imp);
+    pushNpc(arr,st.x,st.z,n.id,n.job,n.activity,imp);
     visibleObjects++;simulatedNpcCount++;
   }
   for(const c of world.cars){const d=Math.hypot(c.x-player.x,c.z-player.z);if(d>carNear)continue;pushCar(arr,c);recomputed++;visibleObjects++;}
   const y=terrainHeight(player.x,player.z,seed);
   if(firstPerson) pushBox(arr,player.x,y,player.z,0.45,0.9,0.32,[0.18,0.32,0.68]);
-  else pushNpc(arr,{x:player.x,z:player.z,y,id:9999,job:'service',activity:'idle'},1);
+  else pushNpc(arr,player.x,player.z,9999,'service','idle',1);
   if(currentMission){
     const mb=missionBuilding(currentMission.stage==='pickup'?currentMission.sourceId:currentMission.targetId);
     if(mb){const my=terrainHeight(mb.x,mb.z,seed);pushCylinder(arr,mb.x,my,mb.z,0.7,5.5,[0.95,0.68,0.25],8);pushCylinder(arr,mb.x,my+5.5,mb.z,1.2,0.08,[1.0,0.78,0.30],8);}
@@ -458,7 +497,7 @@ function drawScene(){
   gl.viewport(0,0,canvas.width,canvas.height);
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.clearColor(0.055+0.16*s.day,0.075+0.22*s.day,0.11+0.27*s.day,1);
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-  const pv=cameraMatrix();
+  const pv=cameraMatrix();lastPV=pv;
   gl.useProgram(sceneProg);
   gl.bindVertexArray(vao);
   gl.uniformMatrix4fv(loc.uPV,false,pv); gl.uniform3f(loc.uCam,camera.x,camera.y,camera.z); gl.uniform1f(loc.uTime,elapsed);
@@ -470,6 +509,34 @@ function drawScene(){
   renderMs=performance.now()-t0;
 }
 
+/**
+ * Project the active mission building into screen space and draw a gold
+ * chevron + distance ring above it on the 2D overlay. Skipped when the target
+ * is behind the camera or when the simulation hasn't rendered yet.
+ */
+function drawMissionMarker(){
+  if(!currentMission||!lastPV)return;
+  const mb=missionBuilding(currentMission.stage==='pickup'?currentMission.sourceId:currentMission.targetId);
+  if(!mb)return;
+  const my=terrainHeight(mb.x,mb.z,seed)+mb.h+6;
+  const clip=transformPoint(lastPV,[mb.x,my,mb.z]);
+  if(clip[3]<=0.001)return; // behind the camera
+  const sx=(clip[0]/clip[3]*0.5+0.5)*overlay.width;
+  const sy=(1-(clip[1]/clip[3]*0.5+0.5))*overlay.height;
+  const dist=Math.hypot(player.x-mb.x,player.z-mb.z);
+  overlayCtx.save();
+  overlayCtx.strokeStyle='rgba(255,211,107,0.9)';
+  overlayCtx.fillStyle='rgba(255,211,107,0.95)';
+  overlayCtx.lineWidth=2;
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(sx,sy-26);overlayCtx.lineTo(sx-9,sy-12);overlayCtx.lineTo(sx+9,sy-12);
+  overlayCtx.closePath();overlayCtx.fill();
+  overlayCtx.beginPath();overlayCtx.arc(sx,sy-2,11,0,Math.PI*2);overlayCtx.stroke();
+  overlayCtx.font='11px system-ui,sans-serif';overlayCtx.textAlign='center';
+  overlayCtx.fillText(`${Math.round(dist)}m`,sx,sy+18);
+  overlayCtx.restore();
+}
+
 function blockedPlayer(nx,nz){
   const cell=480,cx=Math.floor(nx/cell),cz=Math.floor(nz/cell);
   for(let yy=cz-1;yy<=cz+1;yy++)for(let xx=cx-1;xx<=cx+1;xx++){
@@ -477,14 +544,6 @@ function blockedPlayer(nx,nz){
     for(const b of list){if(Math.abs(nx-b.x)<b.w*0.48+1.2 && Math.abs(nz-b.z)<b.d*0.48+1.2)return true;}
   }
   return false;
-}
-
-function roadTarget(n){
-  let target=n.goal;
-  if(!target)return null;
-  const dx=target.x-n.x,dz=target.z-n.z;
-  if(Math.hypot(dx,dz)>140)return target;
-  return target;
 }
 
 function chooseNpcGoal(n) {
@@ -589,7 +648,16 @@ function chooseMission(){
   currentMission={type:'delivery',stage:'pickup',sourceId:source.id,targetId:target.id,crates:3,reward:38+player.rank*9,expires:210};
 }
 
-function missionBuilding(id){const b=world.businesses.find(x=>x.id===id);return b?world.buildings[b.buildingId]:null;}
+/**
+ * Resolve a business id to its building in O(1).
+ * This runs every frame (mission beacon geometry + screen marker), so a linear
+ * scan over every business in the world would be a per-frame cost for nothing.
+ */
+function missionBuilding(id){
+  const b=worldIndex.businessById.get(id);
+  if(!b) return null;
+  return worldIndex.buildingById.get(b.buildingId)||null;
+}
 function missionDistance(id){const b=missionBuilding(id);return b?Math.hypot(player.x-b.x,player.z-b.z):Infinity;}
 function updateMission(dt){
   if(!currentMission){missionTimer-=dt;if(missionTimer<=0){chooseMission();missionTimer=45;}return;}
@@ -803,6 +871,52 @@ $('rendererBtn').addEventListener('click',cycleRenderer);
 $('cameraBtn').addEventListener('click',()=>{firstPerson=!firstPerson;showToast(firstPerson?'First-person camera':'Third-person camera');});
 $('startBtn').addEventListener('click',()=>{initializeAudio();$('start').classList.add('hide');startGame(true);});
 bindTouch();addEventListener('resize',resize);resize();
+
+/**
+ * Development and test surface.
+ *
+ * The runtime test harness (tools/headless_runtime.mjs) drives the real frame
+ * loop, so it needs a way to assert simulation state and to place the player at
+ * a known position instead of walking there over simulated minutes. This object
+ * is the only such entry point; everything else in the game runs through the
+ * normal input and frame path. It is intentionally plain and side-effect free
+ * apart from the explicit `teleport` used by tests and manual QA.
+ */
+globalThis.EMERGENT = {
+  get player() { return player; },
+  get mission() { return currentMission; },
+  get world() { return world; },
+  get running() { return gameRunning; },
+  get renderer() { return { mode: MODES[rendererMode], quality: QUALITY[qualityLevel] }; },
+  get stats() {
+    return {
+      fps, renderMs, staticVertexCount, dynamicVertexCount, shadowVertexCount,
+      recomputed, reused, visibleObjects, simulatedNpcCount, streamOps,
+      streamGenerated, streamFreed, residentChunks: streamResidency.active.size,
+      lastViewProjection: lastPV
+    };
+  },
+  /** Quality level index, so tests can assert streaming radii directly. */
+  get streamRadius() {
+    return qualityLevel === 0 ? 680 : qualityLevel === 1 ? 800 : qualityLevel === 2 ? 980 : 1160;
+  },
+  /** Move the player instantly to a world position (tests / manual QA). */
+  teleport(x, z) {
+    player.x = x; player.z = z;
+    player.y = terrainHeight(x, z, seed) + 0.55;
+    streamKey = '';
+    return { x: player.x, y: player.y, z: player.z };
+  },
+  /** Building that a mission id refers to, for delivery-flow assertions. */
+  missionBuildingFor(mission) {
+    const m = mission || currentMission;
+    if (!m) return null;
+    return missionBuilding(m.stage === 'pickup' ? m.sourceId : m.targetId);
+  },
+  save: saveGame,
+  load: loadGame,
+  newWorld
+};
 
 // Initial WebGL state and world preview; full game starts from the title overlay.
 gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);gl.enable(gl.DEPTH_TEST);gl.clearDepth(1);

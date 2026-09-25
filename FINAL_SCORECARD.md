@@ -14,10 +14,10 @@
 | Visual quality | Real WebGL2 3D, procedural architecture, tree meshes, 3D characters/cars, fog, water, geometric shadows, day/night | Moderate; no PBR texture pipeline, high-end reflections or advanced character animation |
 | Lighting | Directional sun, ambient term, day/night variation, fog and a geometric shadow pass | Strong stylized lighting; not cascaded shadow maps or physically based lighting |
 | Weather | Clear/mist/rain; affects movement, NPC behavior, traffic and business demand; audio ambience changes | Good systems integration; weather effects remain visually light |
-| Performance | Player-centered streaming, spatial collision index, adaptive dynamic-buffer update period, importance-driven NPC reuse, quality levels | Architecture is optimized for scalability; absolute FPS not verified in the build container |
+| Performance | Player-centered streaming, spatial collision index, O(1) mission lookups, adaptive dynamic-buffer update period, importance-driven NPC reuse, quality levels | Measured headlessly (STANDARD 1737 ms vs ADAPTIVE 974 ms for 300 frames); on-device FPS still unverified |
 | Adaptive rendering | STANDARD vs ADAPTIVE; distance/motion/weather/importance; temporal reuse of dynamic representations | Real selective 3D recomputation; not pixel-level temporal reprojection |
 | Streaming | Render geometry rebuilt around player cells; detail varies with quality and distance | Strong render streaming; full data unloading/abstract simulation is not yet implemented |
-| Stability | Node syntax checks, deterministic generation tests, project checks, HTTP asset serving | Strong source-level stability; browser WebGL2 could not be executed in the provided headless environment |
+| Stability | Real game frame loop executed headlessly against a validating WebGL2 surface (8 tests / 78 assertions), plus math, world, project and tooling suites | Crashes, validation errors, NaN geometry and broken mission/save flows now fail the build; a real GPU device is still untested |
 | Save/load | Player, mission, events, discoveries, business state, NPC state, world clock/economy/weather persisted | Strong localStorage persistence; cloud/slot management is not included |
 | Overall polish | Coherent gameplay loop, UI, controls, audio ambience, progression and isolated developer telemetry | A polished research-game vertical slice within the current constraints; not AAA content/asset quality |
 
@@ -26,11 +26,24 @@
 Passing commands:
 
 ```bash
-npm test
-npm run check
-node test_project.mjs
+npm test          # world + math + project + tooling + runtime suites
+npm run check     # syntax check
 ```
 
-The measured CPU-side world-generation timings are recorded in `benchmark.md`.
+`npm test` runs five suites in roughly ten seconds: deterministic world
+generation, matrix/projection algebra, project wiring, preview-server and build
+tooling, and a runtime suite that boots the **unmodified** game and executes its
+real frame loop, simulation, streaming and WebGL draw calls inside Node.
 
-No FPS, GPU time or VRAM figures are reported for this build because the provided browser environment could not initialize a usable WebGL2 session.
+The runtime suite is what makes the previous "browser WebGL2 could not be
+executed" limitation narrower rather than absent: the renderer now provably
+issues well-formed draw calls against in-range buffers with finite vertex data,
+compiles and links its programs, and runs hundreds of frames of simulation
+without a thrown frame. What it cannot prove is anything about a real GPU.
+
+Measured CPU-side world-generation and headless benchmark timings are recorded in
+`benchmark.md`.
+
+No FPS, GPU time or VRAM figures are reported for this build: a real GPU
+measurement path has not yet been validated on a target device, so none is
+claimed.

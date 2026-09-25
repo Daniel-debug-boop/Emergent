@@ -1,5 +1,62 @@
 # CHANGELOG
 
+## 2026-09-25 — runtime verification and hot-path pass
+
+Fixed:
+- **Startup crash on the first building.** `colorForBuilding` indexed a palette
+  with `b.facade % p.length`, and `b.facade` is a float in [0,1), so the index was
+  fractional and the lookup returned `undefined`. The game threw on the very
+  first static-scene build and could not start. The palette is now indexed with a
+  floored, scaled index, hoisted to a frozen module constant instead of being
+  rebuilt per building per rebuild.
+- `pushLowPolyTree` computed a `variation` value that was never used (and used a
+  meaningless float modulo). Trees now apply a deterministic per-tree brightness
+  variation to the canopy.
+- The static server shadowed its own `viewport()` and `clearColor()` methods with
+  instance fields of the same name, and reported `COMPILE_STATUS` from a global
+  error counter that later errors could retroactively falsify.
+
+Performance:
+- `missionBuilding()` scanned all ~714 businesses linearly, twice per frame (the
+  mission beacon and the screen marker). Business and building id maps are now
+  built with the spatial index, making the lookup O(1).
+- `pushNpc` received a spread copy of the whole NPC object — identity, schedule,
+  destination and memory array included — on every visible agent, every rebuild.
+  It now takes the five scalars it actually uses.
+- `buildStaticScene` called `sunState()` (and its trig) twice per building inside
+  the building loop; it is resolved once per build.
+- Terrain biome lookup recomputed a region index per quad from a value it did not
+  use; the lookup now derives directly from the clamped quad origin.
+
+Added:
+- `math3d.mjs`: projection, view, multiply and point-transform math extracted from
+  the renderer into a testable module, with 55 unit assertions including frustum
+  symmetry, depth-range mapping, associativity and degenerate vertical views.
+- `tools/headless_runtime.mjs`: a validating WebGL2 + DOM surface that runs the
+  **unmodified** game inside Node. It checks draw calls against buffer bounds,
+  scans uploads for non-finite floats, rejects uniforms set against the wrong
+  program, and records any GL entry point it does not model so the harness
+  cannot silently stop verifying something. Doubles as a CLI benchmark driver.
+- `test_headless_game.mjs`: 8 runtime tests / 78 assertions driving the real frame
+  loop — boot, long run, keyboard movement, streaming under teleport, every
+  quality level, both renderer modes, a full delivery mission, and save/load
+  including rejection of a save from a different world seed.
+- `tools/serve.mjs`: dependency-free static server binding `0.0.0.0`, with path
+  traversal rejected at the resolver.
+- `tools/build.mjs`: manifest-driven production build into `dist/` that fails if
+  the HTML would not load the entry module, plus a `build.json` stamp.
+- `test_tooling.mjs`: 6 checks covering traversal rejection, MIME types, live HTTP
+  responses and build output.
+- A screen-space mission marker on a dedicated 2D overlay canvas, projected
+  through the extracted matrix module.
+- `globalThis.EMERGENT`: a small, documented dev/test surface (state getters,
+  `teleport`, save/load) so tests assert real simulation state instead of
+  scraping the DOM.
+
+`npm test` now runs all five suites in ~10s. Headless benchmark results for both
+renderer modes are recorded in `benchmark.md`; on-device FPS, GPU time and VRAM
+remain unmeasured and are not claimed.
+
 ## Completion pass — 3D game integration
 
 - Preserved the existing deterministic world/simulation data model.

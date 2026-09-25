@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The game has no runtime or build dependencies; this only materialises a
+      # lockfile so the step is meaningful if that ever changes.
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Syntax check
+        run: npm run check
+
+      # Runs the world, math, project, tooling and runtime suites. The runtime
+      # suite executes the real game frame loop against a validating WebGL2
+      # surface, so no GPU or browser is required in CI.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify build output
+        run: test -s dist/index.html -a -s dist/game3d.js

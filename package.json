@@ -4,8 +4,17 @@
   "type": "module",
   "description": "EMERGENT — procedural 3D open-world game",
   "scripts": {
-    "test": "node test_world.mjs",
+    "test": "npm run test:world && npm run test:math && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test:world": "node test_world.mjs",
+    "test:math": "node test_math3d.mjs",
+    "test:project": "node test_project.mjs",
+    "test:tooling": "node test_tooling.mjs",
+    "test:runtime": "node test_headless_game.mjs",
     "check": "node --check game3d.js",
+    "dev": "node tools/serve.mjs",
+    "build": "node tools/build.mjs",
+    "bench": "node tools/headless_runtime.mjs --frames=300",
+    "bench:adaptive": "node tools/headless_runtime.mjs --frames=300 --mode=adaptive",
     "audit": "npm test && npm run check"
   }
 }
