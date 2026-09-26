@@ -17,22 +17,31 @@ jobs:
         with:
           node-version: '22'
 
-      # The game has no runtime or build dependencies; this only materialises a
-      # lockfile so the step is meaningful if that ever changes.
+      # Rapier is a real runtime dependency: the game imports it, the build
+      # vendors it, and test_physics.mjs executes it. The lockfile is committed
+      # so this resolves the exact version the tests were written against.
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Syntax check
         run: npm run check
 
-      # Runs the world, math, project, tooling and runtime suites. The runtime
-      # suite executes the real game frame loop against a validating WebGL2
-      # surface, so no GPU or browser is required in CI.
+      # Runs the world, math, culling, physics, project, tooling and runtime
+      # suites. The physics suite executes the real Rapier engine and the
+      # runtime suite executes the real game frame loop against a validating
+      # WebGL2 surface, so no GPU or browser is required in CI.
       - name: Test
         run: npm test
 
       - name: Build
         run: npm run build
 
+      # The build is only correct if the vendored physics engine actually
+      # shipped. A green build that omitted it would pass every other check
+      # here and 404 on the player's first frame.
       - name: Verify build output
-        run: test -s dist/index.html -a -s dist/game3d.js
+        run: |
+          test -s dist/index.html -a -s dist/game3d.js -a -s dist/physics.mjs
+          test -s dist/vendor/rapier.mjs
+          cmp dist/vendor/rapier.mjs node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs
+          echo "vendored rapier is byte-identical to the tested dependency"

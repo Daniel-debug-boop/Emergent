@@ -16,11 +16,67 @@ export function hash2(x, y, seed = 1) {
   return n - Math.floor(n);
 }
 
+/**
+ * Value noise on the integer lattice, quintic-smoothed between corners.
+ *
+ * `hash2` is a hash, not a noise function: it is uncorrelated between adjacent
+ * lattice points, so sampling it directly produces white noise rather than
+ * terrain. That is invisible in a still frame of a coarse mesh and fatal for
+ * anything that has to stand on the ground — a character controller fed a
+ * surface that changes by ten units over six units of travel cannot be tuned,
+ * because there is no walkable slope to tune against.
+ *
+ * Interpolating the four corner hashes is the standard construction and costs
+ * four hashes per octave. The quintic fade (`6t^5 - 15t^4 + 10t^3`) is used
+ * rather than the cheaper smoothstep because its first and second derivatives
+ * vanish at the lattice points, which is what stops the terrain from showing
+ * the grid of the noise function as creases.
+ */
+/**
+ * Integer lattice hash for the noise function.
+ *
+ * Deliberately not `hash2`. `hash2` ends in a `Math.sin`, which is accurate and
+ * pleasant for scattering a few thousand objects, but terrain sampling is the
+ * one hot path in world generation: a single heightfield patch is hundreds of
+ * thousands of samples and a sine is roughly an order of magnitude slower than
+ * a multiply. This is a triple32-style avalanche, which is uniform, has no
+ * visible axis alignment, and costs six multiplies.
+ *
+ * Separate from `hash2` so that changing the terrain cannot silently move every
+ * road, district and building in the world.
+ */
+function ihash(x, y, seed) {
+  let h = Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(seed | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+function valueNoise(x, y, seed) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+  const uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+  const h00 = ihash(xi, yi, seed), h10 = ihash(xi + 1, yi, seed);
+  const h01 = ihash(xi, yi + 1, seed), h11 = ihash(xi + 1, yi + 1, seed);
+  return (h00 * (1 - ux) + h10 * ux) * (1 - uy) + (h01 * (1 - ux) + h11 * ux) * uy;
+}
+
+/**
+ * Fractal sum of value noise.
+ *
+ * Each octave is offset to a different lattice seed. Reusing one seed across
+ * octaves is common and usually adequate, but the two are close enough in
+ * frequency that the octaves can correlate into visible grid artefacts at
+ * higher counts, and this costs one add.
+ */
 export function fbm(x, y, seed = 1, octaves = 5) {
-  let v = 0, a = 0.5;
+  let v = 0, a = 0.5, fx = x, fy = y;
   for (let i = 0; i < octaves; i++) {
-    v += a * hash2(x, y, seed);
-    x *= 2.03; y *= 2.01; a *= 0.5;
+    v += a * valueNoise(fx, fy, seed + i * 1013);
+    fx *= 2.03; fy *= 2.01; a *= 0.5;
   }
   return v;
 }

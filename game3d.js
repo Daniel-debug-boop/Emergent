@@ -1,6 +1,10 @@
 import { clamp, rng, hash2, terrainHeight, generateWorld, districtAt } from './world.mjs';
 import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
+import {
+  createPhysicsWorld, ensurePlayer, stepPlayer, playerFeet, setStaticBox,
+  removeStaticBox, buildHeightfield, teleportPlayer, surfaceHeightAt, DEFAULT_TUNING
+} from './physics.mjs';
 
 'use strict';
 
@@ -28,6 +32,46 @@ let seed = WORLD_SEED_DEFAULT;
 let rand = rng(seed);
 let world = null;
 let player = null;
+/**
+ * Rapier world, created once at boot and kept for the life of the session.
+ *
+ * `null` until the async constructor resolves, which is why every consumer has
+ * to cope with a null check rather than assuming it exists. Movement does not
+ * fall back to a hand-rolled collision path: a world that cannot be simulated
+ * must not silently become a world where the player walks through buildings.
+ */
+let physics = null;
+// The simulation world is built during module evaluation, before a single frame
+// can run. A character controller that is not ready on the first frame is a
+// character that clips through geometry on the first frame, and making this
+// lazy would mean every consumer needed a null check on the hot path.
+//
+// It lives here rather than in the boot tail because `seed` has to be
+// initialised before the terrain sampler closes over it.
+try {
+  physics = await createPhysicsWorld({ heightAt: (x, z) => terrainHeight(x, z, seed) });
+} catch (err) {
+  // Unrecoverable, and deliberately loud: a city whose collision cannot be
+  // simulated is not a degraded experience, it is a broken one, and a silent
+  // fallback to a hand-rolled point test is exactly the failure this replaced.
+  const message = `EMERGENT could not start: physics initialisation failed (${err && err.message ? err.message : err}).`;
+  document.body.appendChild(Object.assign(document.createElement('pre'), {
+    textContent: message,
+    style: 'position:fixed;inset:0;z-index:99;margin:0;padding:32px;background:#071018;color:#ff9c8a;font:14px/1.6 ui-monospace,monospace;white-space:pre-wrap'
+  }));
+  throw err;
+}
+// Fixed simulation step. Rapier's world timestep and the movement accumulator
+// both use this, so the two can never drift apart.
+const PHYSICS_DT = 1 / 60;
+// Catch-up ceiling. Six steps is 100ms of simulation, which covers every frame
+// rate down to 10fps; past that the game is already unplayable and spiralling
+// the solver is what turns a hitch into a freeze.
+const MAX_PHYSICS_STEPS = 6;
+let physicsAccumulator = 0;
+// Last-resort record of what each building collider was built from, so a static
+// rebuild only touches geometry that actually changed.
+const colliderCache = new Map();
 let rendererMode = 1;
 let qualityLevel = 2;
 let gameRunning = false;
@@ -75,6 +119,12 @@ let keys = Object.create(null);
 let touchMove = { x: 0, y: 0 };
 let touchSprint = false;
 let inputLocked = true;
+// Camera heights, measured from the player's feet. The pre-physics code kept the
+// body 0.55 above the terrain and hung the camera a further 1.55 (first person)
+// or 4.8 (chase) above that; these reproduce exactly the same framing now that
+// the simulation reports the feet position directly.
+const EYE_ABOVE_FEET = 2.10;
+const CHASE_ABOVE_FEET = 5.35;
 let audioCtx = null;
 let audioNodes = null;
 const QUERY = new URLSearchParams(location.search);
@@ -461,6 +511,7 @@ function buildStaticScene() {
   const staticDetail=adaptive?0.55+qualityLevel*0.12:0.82+qualityLevel*0.06;
   terrainChunk(builder,player.x,player.z,radius,staticDetail);
   const activeChunks = refreshStreamResidency(radius);
+  syncBuildingColliders(activeChunks);
   const addCellObjects=(kind, cb)=>{for(const key of activeChunks){const list=streamResidency.chunks.get(key)?.[kind];if(!list)continue;for(const o of list)cb(o);}};
   const minX=player.x-radius,maxX=player.x+radius,minZ=player.z-radius,maxZ=player.z+radius;
   // Sun state is fixed for the duration of a static build, so resolve it once
@@ -560,7 +611,8 @@ function shadowDraw(pv) {
 }
 
 function cameraMatrix(){
-  const eyeY=player.y+(firstPerson?1.55:4.8);
+  const eyeY=player.y+(firstPerson?EYE_ABOVE_FEET:CHASE_ABOVE_FEET);
+  // EYE_ABOVE_FEET / CHASE_ABOVE_FEET replace the old body-offset + eye-offset pair.
   const back=firstPerson?0:8.5;
   const eye=[player.x-Math.sin(yaw)*back,eyeY,player.z-Math.cos(yaw)*back];
   const dir=[Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),Math.cos(yaw)*Math.cos(pitch)];
@@ -631,13 +683,39 @@ function drawMissionMarker(){
   overlayCtx.restore();
 }
 
-function blockedPlayer(nx,nz){
-  const cell=480,cx=Math.floor(nx/cell),cz=Math.floor(nz/cell);
-  for(let yy=cz-1;yy<=cz+1;yy++)for(let xx=cx-1;xx<=cx+1;xx++){
-    const list=worldIndex.buildings.get(`${xx},${yy}`); if(!list) continue;
-    for(const b of list){if(Math.abs(nx-b.x)<b.w*0.48+1.2 && Math.abs(nz-b.z)<b.d*0.48+1.2)return true;}
+/**
+ * Building colliders for the cells the streamer is currently holding.
+ *
+ * Keyed by `cell#index`, so this is a set-sync and not a diff: a cell the
+ * streamer evicts has its keys simply stop being wanted, and a cell that is
+ * rebuilt with different buildings replaces them by key. That matters because
+ * this runs on every static rebuild, and a rebuild that could leave a stale
+ * collider behind would produce a wall the player can see through.
+ */
+function syncBuildingColliders(activeChunks){
+  if(!physics)return;
+  const wanted=new Set();
+  for(const key of activeChunks){
+    const list=streamResidency.chunks.get(key)?.buildings;
+    if(!list)continue;
+    for(let i=0;i<list.length;i++){
+      const b=list[i];
+      // The visible box runs from the terrain up, so the collider is the same
+      // box expressed as a centre and half extents.
+      const base=terrainHeight(b.x,b.z,seed);
+      const sig=`${b.x.toFixed(2)},${base.toFixed(2)},${b.z.toFixed(2)},${b.w},${b.h},${b.d}`;
+      const k=`${key}#${i}`;
+      wanted.add(k);
+      if(colliderCache.get(k)===sig)continue;
+      colliderCache.set(k,sig);
+      setStaticBox(physics,k,b.x,base+b.h/2,b.z,b.w/2,b.h/2,b.d/2);
+    }
   }
-  return false;
+  for(const k of physics.buildingColliders.keys()){
+    if(wanted.has(k))continue;
+    colliderCache.delete(k);
+    removeStaticBox(physics,k);
+  }
 }
 
 function chooseNpcGoal(n) {
@@ -795,17 +873,72 @@ function updatePlayer(dt){
   let iz=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0)+touchMove.y;
   const len=Math.hypot(ix,iz)||1;if(ix||iz){ix/=len;iz/=len;}
   const sprint=keys.shift||touchSprint;
-  let speed=sprint?300:190;
+  let speed=sprint?DEFAULT_TUNING.sprintSpeed:DEFAULT_TUNING.walkSpeed;
   if(player.energy<18)speed*=0.62;
   if(world.weather===2)speed*=0.92;
   const forward=[Math.sin(yaw),Math.cos(yaw)], right=[Math.cos(yaw),-Math.sin(yaw)];
-  const dx=(forward[0]*iz+right[0]*ix)*speed*dt, dz=(forward[1]*iz+right[1]*ix)*speed*dt;
-  const nx=clamp(player.x+dx,40,world.size-40),nz=clamp(player.z+dz,40,world.size-40);
-  if(!blockedPlayer(nx,nz)){player.x=nx;player.z=nz;} else if(!blockedPlayer(player.x+dx,player.z)){player.x=nx;} else if(!blockedPlayer(player.x,player.z+dz)){player.z=nz;}
+
+  // Fixed-timestep accumulator.
+  //
+  // Rapier advances on a fixed 1/60 step, so feeding it one move per rendered
+  // frame would make gravity, jumping and sliding all run at the wrong rate on
+  // any machine that is not sitting at exactly 60fps — the simulation would
+  // change with the frame rate, which is the single most common way a character
+  // controller ends up feeling broken on someone else's machine. The rendered
+  // frame time decides how many fixed steps to run, not how big each one is.
+  const jump=!!(keys[' ']||keys.space);
+  // The simulation is the authority on where the player is, and `player` is
+  // written from its result every step, so any disagreement means something
+  // outside the movement path moved the player: a loaded save, a new world, or
+  // the debug teleport. Reconciling here means those paths cannot leave the
+  // body behind in the old position, instead of each one having to remember.
+  const bodyX=physics.player?physics.player.translation().x:player.x;
+  const bodyZ=physics.player?physics.player.translation().z:player.z;
+  if(Math.hypot(player.x-bodyX,player.z-bodyZ)>0.5)syncPlayerToPhysics();
+  physicsAccumulator+=dt;
+  let steps=0;
+  while(physicsAccumulator>=PHYSICS_DT&&steps<MAX_PHYSICS_STEPS){
+    const wishX=(forward[0]*iz+right[0]*ix)*speed*PHYSICS_DT;
+    const wishZ=(forward[1]*iz+right[1]*ix)*speed*PHYSICS_DT;
+    // The world bound clamps the *request*, not the result. Correcting the
+    // position afterwards would place the player somewhere the sweep never
+    // agreed to, which is how a player ends up inside a wall.
+    const targetX=clamp(player.x+wishX,40,world.size-40);
+    const targetZ=clamp(player.z+wishZ,40,world.size-40);
+    const r=stepPlayer(physics,targetX-player.x,targetZ-player.z,{jump});
+    player.x=r.x;player.z=r.z;player.y=r.y;
+    player.grounded=r.grounded;
+    physicsAccumulator-=PHYSICS_DT;
+    steps++;
+  }
+  // A long stall (a tab regaining focus, a blocking call) must not be repaid
+  // with dozens of catch-up steps; dropping the backlog is the lesser evil.
+  if(steps>=MAX_PHYSICS_STEPS)physicsAccumulator=0;
   player.speed=(ix||iz)?speed:0;
   player.energy=clamp(player.energy+(ix||iz?-(sprint?5.2:2.1):4.5)*dt,0,100);
-  player.y=terrainHeight(player.x,player.z,seed)+0.55;
   discoverDistricts();
+}
+
+/**
+ * Put the simulated body where the game state says the player is.
+ *
+ * Used on spawn, on a new world and on load. `updatePlayer` also reconciles
+ * automatically if it finds them out of step, so a new caller that moves the
+ * player by other means does not have to know this function exists.
+ */
+function syncPlayerToPhysics(){
+  if(!physics||!player)return;
+  buildHeightfield(physics,player.x,player.z,true);
+  // Stand on the collider, not on the height function. They differ by a
+  // fraction of a unit wherever the terrain is steeper than the collider grid,
+  // and a character spawned inside the collider cannot move at all.
+  const ground=surfaceHeightAt(physics,player.x,player.z);
+  if(ground===null)return;
+  if(physics.player)teleportPlayer(physics,player.x,ground,player.z);
+  else ensurePlayer(physics,player.x,ground,player.z);
+  const feet=playerFeet(physics);
+  player.x=feet.x;player.z=feet.z;player.y=feet.y;
+  physicsAccumulator=0;
 }
 
 function updateSimulation(dt){
@@ -859,9 +992,9 @@ function loadGame(){
 
 function newWorld(nextSeed){
   seed=(nextSeed===undefined?(Date.now()>>>0):nextSeed)>>>0;rand=rng(seed);world=generateWorld(seed);
-  player={x:4800,z:4800,y:terrainHeight(4800,4800,seed)+0.55,money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1};
-  currentMission=null;missionTimer=2;streamKey='';renderAgentState.clear();streamResidency.active.clear();streamResidency.chunks.clear();streamResidency.generated=0;streamResidency.evicted=0;worldIndex.buildings.clear();
-  buildWorldIndex(); buildStaticScene(); buildDynamicScene(true);
+  player={x:4800,z:4800,y:terrainHeight(4800,4800,seed),money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1,grounded:true};
+  currentMission=null;missionTimer=2;streamKey='';renderAgentState.clear();streamResidency.active.clear();streamResidency.chunks.clear();streamResidency.generated=0;streamResidency.evicted=0;worldIndex.buildings.clear();colliderCache.clear();physicsAccumulator=0;
+  buildWorldIndex(); buildStaticScene(); syncPlayerToPhysics(); buildDynamicScene(true);
   saveGame();
   showToast(`New world generated from seed ${seed}.`);
 }
@@ -869,8 +1002,8 @@ function newWorld(nextSeed){
 function startGame(load=true){
   const stored=load?(()=>{try{return JSON.parse(localStorage.getItem(SAVE_KEY)||'null')}catch(e){return null}})():null;
   const chosen=load ? (stored?.seed??WORLD_SEED_DEFAULT) : (Number.isFinite(BENCH_SEED)&&BENCH_SEED>0 ? BENCH_SEED : WORLD_SEED_DEFAULT); seed=chosen>>>0;rand=rng(seed);world=generateWorld(seed);
-  player={x:4800,z:4800,y:terrainHeight(4800,4800,seed)+0.55,money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1};
-  buildWorldIndex();if(load) loadGame();buildWorldIndex();streamResidency.active.clear();streamResidency.chunks.clear();buildStaticScene();buildDynamicScene(true);
+  player={x:4800,z:4800,y:terrainHeight(4800,4800,seed),money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1,grounded:true};
+  buildWorldIndex();if(load) loadGame();buildWorldIndex();streamResidency.active.clear();streamResidency.chunks.clear();colliderCache.clear();physicsAccumulator=0;buildStaticScene();syncPlayerToPhysics();buildDynamicScene(true);
   gameRunning=true;inputLocked=false;last=performance.now();requestAnimationFrame(frame);showToast('Explore, find businesses and complete the delivery route.');
 }
 

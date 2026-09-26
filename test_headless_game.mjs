@@ -202,6 +202,41 @@ await test('the player moves through keyboard input and the world reacts', async
   assertGLHealthy(gl, 'walking');
 });
 
+await test('the player is blocked by buildings, and stands on the terrain', async () => {
+  // The headline claim of the physics integration, asserted through the real
+  // game loop: the old build used an axis-aligned point test with a 1.2-unit
+  // pad, which let a character clip corners and clip *through* anything thin.
+  // A swept character controller does not.
+  const { gl } = await boot({ frames: 10 });
+  const game = globalThis.EMERGENT;
+  // Pick a building with clear ground to its west, so a character that stops
+  // short has stopped at *this* building and not at something behind it.
+  const clear = (b) => !game.world.buildings.some(o =>
+    o !== b && Math.abs(o.z - b.z) < b.d * 0.5 + 25 &&
+    o.x < b.x - b.w * 0.5 && o.x + o.w * 0.5 > b.x - 90);
+  const b = game.world.buildings.find(x => x.w > 30 && x.d > 30 && x.x > 1200 && x.z > 1200 && clear(x));
+  assert(b, 'the world has a building with clear ground beside it to walk into');
+  // Stand 40 units west of it, facing east. Forward is [sin(yaw), cos(yaw)]
+  // and the walk axis is -1 for W, so -pi/2 travels along +x.
+  game.teleport(b.x - 40, b.z);
+  game.look(-Math.PI / 2, -0.24);
+  await pumpFrames(4);
+  assert(game.player.grounded === true, 'the character is standing on the terrain, not hovering or falling');
+  const groundY = game.player.y;
+  fireGlobal('keydown', { key: 'w' });
+  // 200 frames at 190u/s covers 600 units: far past the building, if nothing stops it.
+  for (let i = 0; i < 200; i++) {
+    await pumpFrames(1);
+    if (game.player.x > b.x + b.w * 0.5) break;
+  }
+  fireGlobal('keyup', { key: 'w' });
+  const p = game.player;
+  assert(p.x < b.x + b.w * 0.5, `the character did not pass through the building (x=${p.x.toFixed(1)}, building spans ${(b.x - b.w / 2).toFixed(1)}..${(b.x + b.w / 2).toFixed(1)})`);
+  assert(p.x > b.x - b.w * 0.5 - 3, `and reached the wall rather than stopping short (x=${p.x.toFixed(1)})`);
+  assert(Math.abs(p.y - groundY) < 6, `and stayed at ground level (y=${p.y.toFixed(2)}, was ${groundY.toFixed(2)})`);
+  assertGLHealthy(gl, 'colliding with a building');
+});
+
 await test('crossing the world streams chunks in and out', async () => {
   const { gl } = await boot({ frames: 10 });
   const game = globalThis.EMERGENT;

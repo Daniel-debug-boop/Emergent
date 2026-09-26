@@ -1,5 +1,64 @@
 # CHANGELOG
 
+## 2026-09-26 — a real character controller, and terrain you can stand on
+
+The player collided with the world through `blockedPlayer(x, z)`: an
+axis-aligned point test with a 1.2-unit pad, evaluated only at the destination.
+That is not collision, it is a suggestion. There was no swept test, so anything
+thin could be crossed; no step-up, so a kerb was a wall; no slope limit; and no
+jump. Height was not simulated at all — `player.y` was assigned
+`terrainHeight(x, z) + 0.55` every frame, so the player was glued to the ground
+by fiat and could never leave it.
+
+Movement is now Rapier's `KinematicCharacterController` (`@dimforge/rapier3d-compat`
+0.21.0, Apache-2.0), wrapped by a new `physics.mjs` that owns no collision
+algorithm of its own. Swept collision, autostep, snap-to-ground, slope limits,
+character mass and dynamic-body pushing are the library's. What the wrapper owns
+is keeping a Rapier world in step with EMERGENT's procedural city: a terrain
+heightfield rebuilt around the player, keyed static-box colliders synced from
+the streaming residency set, and a fixed-timestep accumulator so the simulation
+does not change with the frame rate.
+
+**The terrain was the blocker, and it was worse than a tuning problem.**
+`fbm` sampled the lattice hash directly, with no interpolation between lattice
+points, so `terrainHeight` was white noise: measured, it changed by up to
+**13 units over a 3-unit step**. A coarse render mesh hid this completely, and
+so did the old collision, because the player's height was simply assigned from
+the same function. The moment anything needed a *surface* — a collider to stand
+on, a slope to walk up — there was nothing coherent to use. `fbm` now
+interpolates the four corner hashes with a quintic fade, and the measured
+terrain has a **maximum slope of 9.9°** across three seeds, with under a unit
+of change over any 4-unit step.
+
+Everything downstream of that had to be real:
+
+- The collider is a Rapier heightfield on a 12-unit grid, chosen by measurement:
+  it holds the collider surface within **0.28 units** of the surface the
+  renderer draws, where a 26-unit grid was off by 0.78. Spawning at the raw
+  height function instead of the collider surface drops the character inside the
+  terrain, where the controller cannot move at all.
+- A terrain patch is **283 rows generated a few rows per frame**, with the
+  previous collider staying live throughout. Built synchronously it costs 43ms
+  in one frame, four times every four seconds of walking.
+- Movement is sub-stepped so no single sweep is larger than the character
+  radius, and the body is advanced between sweeps. Re-casting from an unmoved
+  body is not sub-stepping, it is the same sweep counted N times — which is
+  exactly how a "sub-stepped" character walks through walls.
+- A jump is a press, not a state. Gating on the level of the key re-fires the
+  instant the character lands, which is how platformers acquire bunny hopping.
+
+**Tests.** `test_physics.mjs` is 26 tests and 71 assertions running the real
+engine — real WASM, no mocks, on every CI run, on a machine with no GPU and no
+browser. It covers swept collision at 40 units per step, wall sliding, kerb
+step-up, ramp ascent, slope limits, jump gating, determinism across two
+identical worlds, body-leak checks, incremental terrain rebuild, and a 1200-step
+walk over real terrain asserting the character never sinks through the collider.
+`test_headless_game.mjs` gained an end-to-end test that walks the real game loop
+into a building and asserts the character is stopped at its wall.
+
+**Also removed:** the hand-rolled point test, and the `player.y = terrainHeight(…) + 0.55`
+line that made the player untouchable by physics.
+
 ## 2026-09-26 — frustum culling: a third of the city stops reaching the GPU
 
 The renderer uploaded the entire streaming radius — up to a 1160-unit disc of

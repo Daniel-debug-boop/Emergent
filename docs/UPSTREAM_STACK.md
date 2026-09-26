@@ -14,6 +14,42 @@ Current native runtime dependencies:
 - Zstandard 1.5.7 — compressed content packs and their integrity checks.
 - Tracy 0.13.0 — live profiling capture, opt-in via `EMERGENT_ENABLE_TRACY=ON`.
 
+Web runtime dependencies:
+- Rapier 0.21.0 (Apache-2.0) — `@dimforge/rapier3d-compat`, the character
+  controller, swept collision, autostep, snap-to-ground, slope limits and the
+  terrain heightfield collider for the shipped WebGL2 game.
+
+Rapier is a separate line from Jolt on purpose. Jolt is the authoritative
+physics for the native engine; the web build is a single self-contained ES
+module with the WASM inlined, and a WASM build of Jolt is not one of the things
+upstream ships prebuilt. Two physics engines is a real cost, so the split is
+stated plainly: `native/` uses Jolt, the browser game uses Rapier, and neither
+talks to the other.
+
+The dependency is listed here on the same evidence as the native ones — it is
+used, not merely installed. `physics.mjs` is the only file that imports it, and
+`test_physics.mjs` executes the real engine, so the symbols below are reached on
+every CI run:
+
+```
+$ node -p "require('./node_modules/@dimforge/rapier3d-compat/package.json').version"
+0.21.0
+$ ls -l node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs | awk '{print $5}'
+4340292
+$ grep -c "computeColliderMovement" dist/rapier.mjs      # shipped, not just installed
+2
+```
+
+The build copies that module verbatim to `dist/vendor/rapier.mjs` and
+`index.html` resolves the bare specifier through an import map, so the browser
+loads byte-identical code to what the tests import from `node_modules`. The
+build fails if a vendored file is not mapped, which turns the failure mode from
+a 404 on the first frame into a build error.
+
+There is no bundler. The reason is in `tools/build.mjs`: the shipped artefact is
+exactly the reviewed source, with no transform that could diverge from what the
+tests execute.
+
 These dependencies are fetched or supplied as source trees. With EMERGENT_REQUIRE_UPSTREAM=ON, missing required targets are configuration errors rather than permission to compile a home-grown substitute.
 
 A dependency is only listed here once something in the tree calls it. Because a static archive nothing references is dropped by the linker without a warning, that is checked directly:
