@@ -98,12 +98,75 @@ await test('boots, renders and reports a clean WebGL frame', async () => {
   assert(game.stats.staticVertexCount > 1000, 'static geometry should be built');
   assert(game.stats.dynamicVertexCount > 0, 'dynamic geometry should be built');
   assert(gl.stats.drawnVertices > 10000, 'renderer should have drawn real geometry');
+  assert(game.stats.staticChunks > 1, `static geometry should be split into cells (got ${game.stats.staticChunks})`);
+  assert(game.stats.visibleChunks > 0, 'at least one static cell should be visible');
+  assert(game.stats.culledChunks > 0, `frustum culling should reject cells (got ${game.stats.culledChunks})`);
+});
+
+await test('static cells are culled by the frustum, not merely drawn', async () => {
+  // The performance claim, measured rather than asserted from a screenshot.
+  //
+  // What matters is not that culling exists but that it *removes work*. If
+  // every cell were submitted this would still pass a "culledChunks > 0"
+  // check as long as one far cell fell outside, so the assertion here is on
+  // submitted vertices: the GPU must receive a fraction of what was uploaded,
+  // and turning the camera must change which fraction.
+  const { gl } = await boot({ frames: 120 });
+  assertGLHealthy(gl, 'culling');
+  const game = globalThis.EMERGENT;
+  const s = game.stats;
+
+  assert(s.staticChunks > 4, `enough cells to cull (${s.staticChunks})`);
+  assert(s.culledChunks > 0, 'some cells fall outside the frustum');
+  assert(s.visibleChunks > 0, 'some cells are inside the frustum');
+  assert(
+    s.submittedStaticVertices < s.staticVertexCount,
+    `culling must submit less than the whole buffer (${Math.round(s.submittedStaticVertices)} of ${Math.round(s.staticVertexCount)})`
+  );
+  // A 60-degree vertical field of view over a 1000-unit radius cannot
+  // legitimately contain every cell. If it does, the frustum is wrong in the
+  // permissive direction and nothing is being saved.
+  assert(
+    s.visibleChunks < s.staticChunks,
+    `not every cell can be on screen at once (${s.visibleChunks}/${s.staticChunks})`
+  );
+
+  // Turning the camera 180 degrees must change the visible set. A culler that
+  // ignored its matrix and always returned true would pass every check above,
+  // so this is the assertion that gives the rest their meaning.
+  // The game starts at yaw = PI, so 0 is the opposite direction.
+  const before = new Set(s.visibleChunkKeys);
+  const beforeSubmitted = s.submittedStaticVertices;
+  game.look(0, -0.24);
+  await pumpFrames(30);
+  const after = game.stats;
+  const afterSet = new Set(after.visibleChunkKeys);
+  assert(after.visibleChunks > 0, 'cells are still visible after turning around');
+  const shared = [...afterSet].filter(k => before.has(k)).length;
+  assert(
+    shared < afterSet.size,
+    `turning around must reveal different cells (${shared} of ${afterSet.size} cells unchanged)`
+  );
+  assert(
+    after.submittedStaticVertices !== beforeSubmitted || afterSet.size !== before.size,
+    'turning the camera must change what is submitted to the GPU'
+  );
 });
 
 await test('survives a long run without NaN geometry or lost frames', async () => {
   const { gl } = await boot({ frames: 600 });
   assertGLHealthy(gl, 'long run');
-  assertEqual(gl.stats.drawCalls, 600 * 3, 'expected shadow + static + dynamic draws each frame');
+  // Draw calls are now one per visible static cell plus the shadow pass and
+  // the dynamic pass, so the count is a function of the frustum. What has to
+  // hold is the shape: more than the two non-culled passes, and never zero.
+  const game = globalThis.EMERGENT;
+  const perFrame = gl.stats.drawCalls / 600;
+  assert(perFrame >= 2, `at least the shadow and dynamic passes run every frame (${perFrame.toFixed(2)} draws/frame)`);
+  assertEqual(
+    Math.round(gl.stats.drawCalls),
+    Math.round(600 * (game.stats.visibleChunks + 2)),
+    'draw calls should equal visible cells plus shadow and dynamic, each frame'
+  );
   // The sim ran ~20s of virtual time: clock, weather, economy, traffic and NPCs
   // all advanced. Nothing may become non-finite while they do.
   const w = globalThis.EMERGENT.world;

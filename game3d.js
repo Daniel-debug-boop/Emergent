@@ -1,5 +1,6 @@
 import { clamp, rng, hash2, terrainHeight, generateWorld, districtAt } from './world.mjs';
 import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
+import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
 
 'use strict';
 
@@ -40,6 +41,17 @@ let missionTimer = 0;
 let saveTimer = 0;
 let eventTimer = 0;
 let staticVertexCount = 0;
+// Static geometry is uploaded once as a single buffer, but laid out as one
+// contiguous run per 480-unit cell. Each run keeps its own bounds, so the draw
+// loop can reject a cell with a frustum test and submit a sub-range instead of
+// the whole city. Before this, the entire streaming radius went to the GPU
+// every frame regardless of where the camera pointed.
+let staticChunks = [];
+let visibleChunkKeys = [];
+let visibleChunks = 0;
+let culledChunks = 0;
+let submittedStaticVertices = 0;
+const frustumPlanes = new Float32Array(24);
 let dynamicVertexCount = 0;
 let shadowVertexCount = 0;
 let renderMs = 0;
@@ -365,7 +377,7 @@ function buildWorldIndex() {
 function cellsInRadius(x,z,r){const cell=480,cx=Math.floor(x/cell),cz=Math.floor(z/cell),n=Math.ceil(r/cell);const out=[];for(let yy=cz-n;yy<=cz+n;yy++)for(let xx=cx-n;xx<=cx+n;xx++)out.push([xx,yy]);return out;}
 function keyCell(x,z){return `${Math.floor(x/480)},${Math.floor(z/480)}`;}
 
-function terrainChunk(arr,cx,cz,radius,detail){
+function terrainChunk(builder,cx,cz,radius,detail){
   const minX=cx-radius,minZ=cz-radius,size=radius*2;
   const step=detail>=0.85?38:detail>=0.55?56:detail>=0.3?78:110;
   for(let z=0;z<size;z+=step) for(let x=0;x<size;x+=step){
@@ -377,18 +389,77 @@ function terrainChunk(arr,cx,cz,radius,detail){
     const rz=Math.max(0,Math.min(7,Math.floor(clamp(z0,0,9599)/1200)));
     const biome=world.regions[rz*8+rx]?.biome;
     const c=biome==='lush'?[0.16,0.32,0.16]:biome==='dry'?[0.36,0.30,0.18]:[0.22,0.36,0.23];
-    pushQuad(arr,[x0,y00,z0],[x1,y10,z0],[x1,y11,z1],[x0,y01,z1],[0,1,0],c);
+    // Each quad is routed by its own centre, so a quad straddling a cell
+    // boundary lands wholly in one cell. That keeps every cell's run
+    // contiguous, which is what makes culling a sub-range draw.
+    pushQuad(builder.target((x0+x1)/2,(z0+z1)/2),[x0,y00,z0],[x1,y10,z0],[x1,y11,z1],[x0,y01,z1],[0,1,0],c);
   }
+}
+
+const CHUNK_SIZE = 480;
+
+/**
+ * Accumulates geometry into per-cell vertex runs.
+ *
+ * The key property is that a cell's vertices end up contiguous in the final
+ * buffer, so culling is a `drawArrays(first, count)` sub-range rather than a
+ * buffer rebind. One upload, many draws, no VAO churn.
+ */
+function makeChunkBuilder() {
+  const cells = new Map();
+  return {
+    cells,
+    /** The vertex array for the cell containing (x, z), created on demand. */
+    target(x, z) {
+      const key = `${Math.floor(x / CHUNK_SIZE)},${Math.floor(z / CHUNK_SIZE)}`;
+      let arr = cells.get(key);
+      if (!arr) { arr = []; cells.set(key, arr); }
+      return arr;
+    }
+  };
+}
+
+/** Axis-aligned bounds of a stride-9 (pos, normal, colour) run of vertices. */
+function boundsOf(vertices, first, count) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const o = (first + i) * 9;
+    const x = vertices[o], y = vertices[o + 1], z = vertices[o + 2];
+    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+  }
+  if (count === 0) return { min: [0, 0, 0], max: [0, 0, 0] };
+  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+}
+
+/** Concatenate the builder's cells into one buffer, recording each cell's run. */
+function flattenCells(cells) {
+  let total = 0;
+  for (const arr of cells.values()) total += arr.length;
+  const vertices = new Float32Array(total);
+  const runs = [];
+  let offset = 0;
+  for (const [key, arr] of cells) {
+    const count = arr.length / 9;
+    if (count === 0) continue;
+    vertices.set(arr, offset * 9);
+    const bounds = boundsOf(vertices, offset, count);
+    runs.push({ key, first: offset, count, min: bounds.min, max: bounds.max });
+    offset += count;
+  }
+  return { vertices, runs };
 }
 
 function buildStaticScene() {
   if (!world || !player) return;
   const t0=performance.now();
-  const arr=[]; const shadows=[];
+  const builder = makeChunkBuilder();
+  const shadowBuilder = makeChunkBuilder();
   const radius = qualityLevel===0?680:qualityLevel===1?800:qualityLevel===2?980:1160;
   const adaptive = rendererMode===1;
   const staticDetail=adaptive?0.55+qualityLevel*0.12:0.82+qualityLevel*0.06;
-  terrainChunk(arr,player.x,player.z,radius,staticDetail);
+  terrainChunk(builder,player.x,player.z,radius,staticDetail);
   const activeChunks = refreshStreamResidency(radius);
   const addCellObjects=(kind, cb)=>{for(const key of activeChunks){const list=streamResidency.chunks.get(key)?.[kind];if(!list)continue;for(const o of list)cb(o);}};
   const minX=player.x-radius,maxX=player.x+radius,minZ=player.z-radius,maxZ=player.z+radius;
@@ -396,11 +467,12 @@ function buildStaticScene() {
   // instead of recomputing trig per building.
   const sun=sunState(), castShadows=sun.day>0.08, sx=sun.dir[0], sy=Math.max(0.2,sun.dir[1]), sz=sun.dir[2];
   addCellObjects('roads',r=>{
-    if(r.x+r.w<minX||r.x>maxX||r.z+r.d<minZ||r.z>maxZ)return; pushRoad(arr,r);
+    if(r.x+r.w<minX||r.x>maxX||r.z+r.d<minZ||r.z>maxZ)return; pushRoad(builder.target(r.x,r.z),r);
   });
   addCellObjects('buildings',b=>{
     if(b.x+b.w/2<minX||b.x-b.w/2>maxX||b.z+b.d/2<minZ||b.z-b.d/2>maxZ)return;
     const d=Math.hypot(b.x-player.x,b.z-player.z); const detail=clamp(1-d/radius,0,1)*staticDetail;
+    const arr=builder.target(b.x,b.z);
     pushBuilding(arr,b,detail);
     if(detail>0.72 && (b.id%3===0)) pushStreetFurniture(arr,b.x+b.w*0.7,b.z+b.d*0.7,detail);
     // Project a simple soft sun shadow on the local terrain; geometry, not a screen-space fake.
@@ -409,7 +481,11 @@ function buildStaticScene() {
       const ox=-sx*ext*0.65, oz=-sz*ext*0.65;
       const x0=b.x-b.w*.46+ox, x1=b.x+b.w*.46+ox, z0=b.z-b.d*.46+oz, z1=b.z+b.d*.46+oz;
       const y0=terrainHeight(x0,z0,seed)+0.045, y1=terrainHeight(x1,z0,seed)+0.045, y2=terrainHeight(x1,z1,seed)+0.045, y3=terrainHeight(x0,z1,seed)+0.045;
-      shadows.push(x0,y0,z0,x1,y1,z0,x1,y2,z1,x0,y0,z0,x1,y2,z1,x0,y3,z1);
+      // Routed by the shadow's own centre, not the building's: the offset can
+      // be tens of units and would otherwise land the quad in the neighbouring
+      // cell, where it would then be culled with the wrong bounds.
+      const sh=shadowBuilder.target(b.x+ox,b.z+oz);
+      sh.push(x0,y0,z0,x1,y1,z0,x1,y2,z1,x0,y0,z0,x1,y2,z1,x0,y3,z1);
     }
   });
   let treeStep = adaptive ? (qualityLevel===0?7:qualityLevel===1?5:qualityLevel===2?3:2) : (qualityLevel===0?5:qualityLevel===1?3:1);
@@ -418,13 +494,17 @@ function buildStaticScene() {
     if(t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ)return;
     if((counter++ % treeStep)!==0)return;
     const d=Math.hypot(t.x-player.x,t.z-player.z); if(adaptive && d>700 && hash2(t.x*0.01,t.z*0.01,seed)>0.42)return;
-    pushLowPolyTree(arr,t.x,terrainHeight(t.x,t.z,seed),t.z,t.s,t.type,t.seed);
+    pushLowPolyTree(builder.target(t.x,t.z),t.x,terrainHeight(t.x,t.z,seed),t.z,t.s,t.type,t.seed);
   });
   // River is a separate animated water surface with real depth-tested geometry.
-  for(const w of world.water){if(Math.abs(w.x-player.x)<radius+260 && Math.abs(w.z-player.z)<radius+260){const y=terrainHeight(w.x,w.z,seed)+0.15;const c=[0.06,0.22,0.32];pushBox(arr,w.x,y,w.z,w.w,0.04,w.d,c,c);}}
-  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.STATIC_DRAW);
-  staticVertexCount=arr.length/9;
-  gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(shadows),gl.STATIC_DRAW);shadowVertexCount=shadows.length/3;
+  for(const w of world.water){if(Math.abs(w.x-player.x)<radius+260 && Math.abs(w.z-player.z)<radius+260){const y=terrainHeight(w.x,w.z,seed)+0.15;const c=[0.06,0.22,0.32];pushBox(builder.target(w.x,w.z),w.x,y,w.z,w.w,0.04,w.d,c,c);}}
+
+  const staticData = flattenCells(builder.cells);
+  const shadowData = flattenCells(shadowBuilder.cells);
+  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf);gl.bufferData(gl.ARRAY_BUFFER,staticData.vertices,gl.STATIC_DRAW);
+  staticVertexCount=staticData.vertices.length/9;
+  staticChunks=staticData.runs;
+  gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,shadowData.vertices,gl.STATIC_DRAW);shadowVertexCount=shadowData.vertices.length/9;
   streamOps++; streamGenerated=streamResidency.generated; streamFreed=streamResidency.evicted;
   streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}`;
   if($('loading')) $('loading').style.display='none';
@@ -502,7 +582,21 @@ function drawScene(){
   gl.bindVertexArray(vao);
   gl.uniformMatrix4fv(loc.uPV,false,pv); gl.uniform3f(loc.uCam,camera.x,camera.y,camera.z); gl.uniform1f(loc.uTime,elapsed);
   gl.uniform3f(loc.uSun,s.dir[0],s.dir[1],s.dir[2]); gl.uniform3f(loc.uFog,...fog); gl.uniform3f(loc.uAmbient,0.24+0.22*s.day,0.28+0.28*s.day,0.34+0.30*s.day); gl.uniform1f(loc.uFogDensity,world.weather===1?0.0000032:world.weather===2?0.0000025:0.0000018); gl.uniform1f(loc.uNight,night); gl.uniform1f(loc.uWater,0);
-  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24); gl.drawArrays(gl.TRIANGLES,0,staticVertexCount);
+  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24);
+  // Frustum-cull the static cells. Each run is a contiguous slice of the one
+  // static buffer, so a rejected cell costs a plane test and nothing else: no
+  // rebind, no re-upload, no per-object draw call. The whole point is that a
+  // camera facing away from most of the city stops paying for it.
+  extractFrustumPlanes(pv, frustumPlanes);
+  visibleChunks=0; culledChunks=0; submittedStaticVertices=0;
+  // Reused rather than reallocated: the keys are already-retained strings from
+  // the run table, so a per-frame array would be the only garbage in the loop.
+  visibleChunkKeys.length=0;
+  for(const run of staticChunks){
+    if(!aabbVisible(frustumPlanes,run.min,run.max)){culledChunks++;continue;}
+    gl.drawArrays(gl.TRIANGLES,run.first,run.count);
+    visibleChunks++; submittedStaticVertices+=run.count; visibleChunkKeys.push(run.key);
+  }
   shadowDraw(pv);
   gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24); gl.drawArrays(gl.TRIANGLES,0,dynamicVertexCount);
   gl.bindVertexArray(null);
@@ -791,7 +885,7 @@ function updateHUD(){
   if(currentMission){const id=currentMission.stage==='pickup'?currentMission.sourceId:currentMission.targetId;const d=missionDistance(id);const action=currentMission.stage==='pickup'?'Pick up':'Deliver';$('objective').textContent=`${action} ${currentMission.crates} crates · ${Math.round(d)}m · reward $${currentMission.reward}`;}
   else $('objective').textContent='Explore the world — your next delivery will emerge from local shortages.';
   $('clock').textContent=`${world.time.toFixed(1).padStart(4,'0')} · ${['CLEAR','MIST','RAIN'][world.weather]}`;
-  if(debugVisible){$('debug').innerHTML=`<b>DEVELOPER TELEMETRY</b><br>FPS ${fps.toFixed(1)} · render ${renderMs.toFixed(2)}ms<br>static ${Math.round(staticVertexCount).toLocaleString()}v · dynamic ${Math.round(dynamicVertexCount).toLocaleString()}v · shadow ${Math.round(shadowVertexCount).toLocaleString()}v<br>visible ${visibleObjects} · NPC rendered ${simulatedNpcCount}/${world.npcs.length}<br>recompute ${recomputed} · reuse ${reused}<br>stream ops ${streamOps} · resident ${streamResidency.active.size} chunks · created ${streamGenerated} · evicted ${streamFreed} · last ${streamResidency.lastBuildMs.toFixed(2)}ms<br>world ${world.buildings.length} buildings · ${world.trees.length} trees · ${world.businesses.length} businesses`;}
+  if(debugVisible){$('debug').innerHTML=`<b>DEVELOPER TELEMETRY</b><br>FPS ${fps.toFixed(1)} · render ${renderMs.toFixed(2)}ms<br>static ${Math.round(staticVertexCount).toLocaleString()}v · dynamic ${Math.round(dynamicVertexCount).toLocaleString()}v · shadow ${Math.round(shadowVertexCount).toLocaleString()}v<br>cells ${visibleChunks}/${staticChunks.length} drawn · ${culledChunks} culled · ${Math.round(submittedStaticVertices).toLocaleString()}v submitted<br>visible ${visibleObjects} · NPC rendered ${simulatedNpcCount}/${world.npcs.length}<br>recompute ${recomputed} · reuse ${reused}<br>stream ops ${streamOps} · resident ${streamResidency.active.size} chunks · created ${streamGenerated} · evicted ${streamFreed} · last ${streamResidency.lastBuildMs.toFixed(2)}ms<br>world ${world.buildings.length} buildings · ${world.trees.length} trees · ${world.businesses.length} businesses`;}
 }
 
 function frame(now){
@@ -891,6 +985,8 @@ globalThis.EMERGENT = {
   get stats() {
     return {
       fps, renderMs, staticVertexCount, dynamicVertexCount, shadowVertexCount,
+      staticChunks: staticChunks.length, visibleChunks, culledChunks, submittedStaticVertices,
+      visibleChunkKeys: visibleChunkKeys.slice(),
       recomputed, reused, visibleObjects, simulatedNpcCount, streamOps,
       streamGenerated, streamFreed, residentChunks: streamResidency.active.size,
       lastViewProjection: lastPV
@@ -906,6 +1002,19 @@ globalThis.EMERGENT = {
     player.y = terrainHeight(x, z, seed) + 0.55;
     streamKey = '';
     return { x: player.x, y: player.y, z: player.z };
+  },
+  /**
+   * Aim the camera (tests / manual QA).
+   *
+   * Exposed because "does culling follow the camera" is not observable any
+   * other way from outside the module: without this a test can only assert
+   * that *some* cells were culled, which a culler that ignores its input
+   * entirely would also satisfy.
+   */
+  look(newYaw, newPitch) {
+    yaw = newYaw;
+    if (newPitch !== undefined) pitch = newPitch;
+    return { yaw, pitch };
   },
   /** Building that a mission id refers to, for delivery-flow assertions. */
   missionBuildingFor(mission) {
