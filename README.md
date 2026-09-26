@@ -51,6 +51,13 @@ What that buys over the point test it replaced:
 The simulation runs on a fixed 1/60s step with an accumulator, so gravity, jump
 height and sliding do not change with the frame rate.
 
+### The crowd
+
+NPCs and cars within 260 units of the player get kinematic bodies, so you walk
+*around* people rather than through them, and traffic is solid rather than
+decorative. Beyond that radius nothing can be touched, so a collider out there
+would cost solver time and buy nothing.
+
 `test_physics.mjs` runs the real engine — real WASM, no mocks — as part of
 `npm test`, so all of the above is checked on every CI run on a machine with no
 GPU and no browser.
@@ -174,7 +181,8 @@ reads past the end of a buffer, a uniform set on the wrong program, a broken
 mission delivery flow, a save/load that does not round-trip, or a GL entry point
 the harness does not model (so the harness cannot silently stop verifying
 something). It covers boot, a long run, keyboard movement, walking into a
-building and being stopped by it, streaming under
+building and being stopped by it, walking into an NPC and being stopped by it,
+streaming under
 teleport, every quality level, both renderer modes, a full delivery mission, and
 save/load including rejection of a save from a different world.
 

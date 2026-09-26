@@ -3,7 +3,8 @@ import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
 import {
   createPhysicsWorld, ensurePlayer, stepPlayer, playerFeet, setStaticBox,
-  removeStaticBox, buildHeightfield, teleportPlayer, surfaceHeightAt, DEFAULT_TUNING
+  removeStaticBox, setAgentBox, removeAgent, buildHeightfield, teleportPlayer,
+  surfaceHeightAt, DEFAULT_TUNING
 } from './physics.mjs';
 
 'use strict';
@@ -684,6 +685,64 @@ function drawMissionMarker(){
 }
 
 /**
+ * How far away an NPC or car has to be before it stops being solid.
+ *
+ * This is a reachability bound, not a quality setting: nothing beyond it can be
+ * touched, so a collider out there costs solver time and buys nothing. It is
+ * also generous — a sprinting player closes 300 units a second, so an agent at
+ * the edge is still three quarters of a second away.
+ */
+const AGENT_COLLIDER_RADIUS = 260;
+/**
+ * Hard cap on kinematic agent bodies.
+ *
+ * Every agent inside the radius wants a body, and the crowd is dense enough
+ * near a district centre that "everything in range" is not a bounded number.
+ * Taking the nearest first means the budget is spent on the agents the player
+ * could actually collide with this frame, and the ones that fall off the end
+ * are the ones already out of reach.
+ */
+const AGENT_COLLIDER_BUDGET = 64;
+
+/**
+ * Give the nearby crowd and traffic real collision bodies.
+ *
+ * Before this, the player walked through everyone: NPCs had no colliders at
+ * all, and cars drove through the player and each other. Bodies are kinematic
+ * rather than dynamic on purpose — NPCs follow scripted goals and cars follow
+ * lanes, so simulating them with forces would produce a slower and less
+ * controllable simulation, and a crowd that shoved the player around is a
+ * worse game than a crowd the player has to walk around.
+ *
+ * Synced every frame as a set, keyed by entity, so an agent that leaves the
+ * radius has its body removed and one that enters gets one created. The
+ * positions are one frame behind the simulation that drives them, which for a
+ * body the player closes on at 300 units a second is well inside a frame of
+ * travel.
+ */
+function syncAgentColliders(){
+  if(!physics)return;
+  const wanted=new Set();
+  const near=[];
+  for(const n of world.npcs){
+    const d=Math.hypot(n.x-player.x,n.z-player.z);
+    if(d<AGENT_COLLIDER_RADIUS)near.push({d,key:`npc${n.id}`,x:n.x,z:n.z,hx:0.45,hy:0.8,hz:0.35});
+  }
+  for(const c of world.cars){
+    const d=Math.hypot(c.x-player.x,c.z-player.z);
+    if(d<AGENT_COLLIDER_RADIUS)near.push({d,key:`car${c.id}`,x:c.x,z:c.z,hx:c.horizontal?2.0:1.0,hy:0.6,hz:c.horizontal?1.0:2.0});
+  }
+  near.sort((a,b)=>a.d-b.d);
+  const count=Math.min(near.length,AGENT_COLLIDER_BUDGET);
+  for(let i=0;i<count;i++){
+    const a=near[i];
+    wanted.add(a.key);
+    setAgentBox(physics,a.key,a.x,terrainHeight(a.x,a.z,seed)+a.hy,a.z,a.hx,a.hy,a.hz);
+  }
+  for(const key of physics.dynamicBodies.keys())if(!wanted.has(key))removeAgent(physics,key);
+}
+
+/**
  * Building colliders for the cells the streamer is currently holding.
  *
  * Keyed by `cell#index`, so this is a set-sync and not a diff: a cell the
@@ -966,6 +1025,7 @@ function updateSimulation(dt){
     }
   }
   updateTraffic(dt);
+  syncAgentColliders();
   economyTimer-=dt;if(economyTimer<=0){updateBusinesses(1.0);economyTimer=1;}
   updateMission(dt);
   eventMaintenance(dt);
