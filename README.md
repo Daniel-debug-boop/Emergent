@@ -23,9 +23,37 @@ The delivery target is selected from world state. Businesses with low stock can 
 
 ## Controls
 
-Desktop: `WASD` / arrows move, `Shift` sprint, click + mouse look, `E` interact, `T` standard/adaptive renderer, `Q` quality, `V` first/third-person camera, `F2` save, `F3` load, `D` developer telemetry, `N` new world.
+Desktop: `WASD` / arrows move, `Shift` sprint, `Space` jump, click + mouse look, `E` interact, `T` standard/adaptive renderer, `Q` quality, `V` first/third-person camera, `F2` save, `F3` load, `D` developer telemetry, `N` new world.
 
 Mobile: virtual joystick, RUN and E buttons appear automatically on narrow screens.
+
+## Movement and collision
+
+The player is simulated by [Rapier](https://rapier.rs) 0.21.0
+(`@dimforge/rapier3d-compat`, Apache-2.0), not by bespoke code. `physics.mjs`
+wraps the library and owns no collision algorithm: swept collision, autostep,
+snap-to-ground, slope limits, character mass and dynamic-body pushing are all
+Rapier's.
+
+What that buys over the point test it replaced:
+
+- **You cannot walk through a building**, at any speed. A 40-unit-per-step move
+  is split into sub-sweeps no larger than the character radius, and the
+  anti-tunnelling guarantee holds — asserted, not assumed.
+- **You can walk up a kerb** (0.9-unit autostep) but not a wall.
+- **You can walk up a ramp** and slide back down a slope you cannot climb.
+- **You can jump**, and holding the key does not make you bunny-hop, because a
+  jump is a press edge.
+- **You are simulated, not placed.** The terrain is a Rapier heightfield sampled
+  from the same `terrainHeight` the renderer displaces vertices with, rebuilt
+  incrementally around the player as they travel.
+
+The simulation runs on a fixed 1/60s step with an accumulator, so gravity, jump
+height and sliding do not change with the frame rate.
+
+`test_physics.mjs` runs the real engine — real WASM, no mocks — as part of
+`npm test`, so all of the above is checked on every CI run on a machine with no
+GPU and no browser.
 
 ## World
 
@@ -130,8 +158,10 @@ npm run check     # syntax check
 
 | Suite | Command | What it proves |
 |---|---|---|
-| World | `npm run test:world` | Generation is deterministic per seed and varies across seeds; required populations exist |
+| World | `npm run test:world` | Generation is deterministic per seed and varies across seeds; required populations exist; terrain is continuous, walkable and has relief |
 | Math | `npm run test:math` | Projection, view, multiply and point-transform algebra, including degenerate cases |
+| Culling | `npm run test:culling` | Frustum plane extraction and AABB rejection, including the degenerate cases |
+| Physics | `npm run test:physics` | The real Rapier engine: swept collision at speed, wall sliding, step-up, slope limits, jump gating, determinism, terrain streaming, no body leaks |
 | Project | `npm run test:project` | Required renderer/simulation systems exist in source, HTML wiring is intact, terrain is finite |
 | Tooling | `npm run test:tooling` | Static server rejects path traversal and serves correct MIME types; the build emits every file the page needs |
 | Runtime | `npm run test:runtime` | The real game boots and runs its real frame loop for hundreds of frames |
@@ -143,7 +173,8 @@ validation error, non-finite geometry uploaded to a buffer, a draw call that
 reads past the end of a buffer, a uniform set on the wrong program, a broken
 mission delivery flow, a save/load that does not round-trip, or a GL entry point
 the harness does not model (so the harness cannot silently stop verifying
-something). It covers boot, a long run, keyboard movement, streaming under
+something). It covers boot, a long run, keyboard movement, walking into a
+building and being stopped by it, streaming under
 teleport, every quality level, both renderer modes, a full delivery mission, and
 save/load including rejection of a save from a different world.
 

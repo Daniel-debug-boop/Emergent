@@ -31,6 +31,13 @@
 <div id="controls"><button id="saveBtn" class="btn">SAVE</button><button id="loadBtn" class="btn">LOAD</button><button id="newBtn" class="btn">NEW WORLD</button><button id="rendererBtn" class="btn">RENDERER</button><button id="qualityBtn" class="btn">QUALITY</button><button id="cameraBtn" class="btn">CAMERA</button></div>
 <div id="touch"><div id="stick" class="stick"><div id="knob" class="knob"></div></div></div>
 <div id="touchBtns"><button id="touchSprint" class="btn round">RUN</button><button id="touchInteract" class="btn round">E</button></div>
+<!--
+  Import map: the game ships one third-party module, Rapier, and browsers cannot
+  resolve a bare package specifier on their own. Mapping it to a path the build
+  and the dev server both serve keeps the dependency a single vendored file with
+  no bundler and no transform step in front of reviewed source.
+-->
+<script type="importmap">{"imports":{"@dimforge/rapier3d-compat":"./vendor/rapier.mjs"}}</script>
 <script type="module" src="game3d.js"></script>
 </body>
 </html>

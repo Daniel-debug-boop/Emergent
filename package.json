@@ -2,12 +2,13 @@
   "name": "emergent",
   "version": "2.0.0",
   "type": "module",
-  "description": "EMERGENT \u2014 procedural 3D open-world game",
+  "description": "EMERGENT — procedural 3D open-world game",
   "scripts": {
-    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:physics && npm run test:project && npm run test:tooling && npm run test:runtime",
     "test:world": "node test_world.mjs",
     "test:math": "node test_math3d.mjs",
     "test:culling": "node test_culling.mjs",
+    "test:physics": "node test_physics.mjs",
     "test:project": "node test_project.mjs",
     "test:tooling": "node test_tooling.mjs",
     "test:runtime": "node test_headless_game.mjs",
@@ -17,5 +18,8 @@
     "bench": "node tools/headless_runtime.mjs --frames=300",
     "bench:adaptive": "node tools/headless_runtime.mjs --frames=300 --mode=adaptive",
     "audit": "npm test && npm run check"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0"
   }
 }

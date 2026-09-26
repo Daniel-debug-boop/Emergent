@@ -17,6 +17,18 @@ const ROOT = path.resolve(path.resolve(path.dirname(fileURLToPath(import.meta.ur
 const PORT = Number(process.env.PORT || 8765);
 const HOST = '0.0.0.0';
 
+/**
+ * Third-party modules the page resolves through an import map.
+ *
+ * The production build copies these into `dist/vendor/`, so the shipped page
+ * never depends on `node_modules`. The dev server has no build step, so it maps
+ * the same URL onto the installed package instead — one URL, two sources, and
+ * no chance of the dev server testing a different file from the one that ships.
+ */
+const VENDOR = {
+  '/vendor/rapier.mjs': 'node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs'
+};
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -37,6 +49,7 @@ const MIME = {
  */
 async function resolveFile(urlPath) {
   const decoded = decodeURIComponent(urlPath.split('?')[0]);
+  if (VENDOR[decoded]) return path.join(ROOT, VENDOR[decoded]);
   const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
   const target = path.resolve(ROOT, relative);
   if (target !== ROOT && !target.startsWith(ROOT + path.sep)) return null;
@@ -79,7 +92,7 @@ export function start(port = PORT, host = HOST) {
   });
 }
 
-export { resolveFile, ROOT, MIME };
+export { resolveFile, ROOT, MIME, VENDOR };
 
 // Only listen when executed directly, so tests can import the path logic
 // without binding a port.
