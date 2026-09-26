@@ -14,6 +14,31 @@ The current repository already contains a working WebGL2 game and a native Vulka
 | Mesh processing | REUSE → meshoptimizer | Provides vertex/index optimization and meshlet-related processing needed for GPU-driven rendering. | MIT. |
 | glTF | REUSE → fastgltf | Lightweight native glTF loading is preferable to a custom asset parser. | MIT. |
 | Audio | REUSE → miniaudio | Single-source cross-platform audio layer with low integration cost. | Public domain or MIT-0. |
+| Windowing | DEFER → `SurfaceProvider` interface, no library | A window library owns a display connection, an event queue and a native surface handle. All three are platform-specific and none can be stubbed without inventing a fake display server, so a window abstraction that fakes one would test nothing. | `SurfaceProvider` (`native/include/emergent/render_backend.hpp`) is the extension point. Adding GLFW, SDL or XCB is one class; nothing in the frame loop, physics, animation or render path changes. |
+
+## Windowing: why there is no window library here
+
+Recorded separately because it is the one place where EMERGENT has chosen an
+interface over a library, and the reasoning is not obvious from the code.
+
+The renderer needs exactly four things from a window: a native handle it can
+build a `VkSurfaceKHR` from, a framebuffer size, whether it is currently
+visible, and its platform's instance extensions. That is `SurfaceProvider`.
+
+Creating the surface is the provider's job rather than the renderer's, and that
+is load-bearing rather than cosmetic. Creating a `VkSurfaceKHR` means including
+that platform's window headers — `xcb/xcb.h`, `windows.h`, `AppKit` — and
+`vulkan_render.cpp` should not have to know which platform it is on. The same
+reasoning forces `VulkanBackend::initialize()` to take the instance extensions
+as a parameter: a surface extension can only be requested at `vkCreateInstance`
+time, so a window attached afterwards finds an instance that cannot create a
+surface at all. `NativeEngine::renderTo()` says exactly that rather than
+letting a renderer quietly go offscreen and look like it worked.
+
+The cost is that no window has ever been opened by this tree, and the swapchain
+branch of `VulkanRenderBackend` is unexercised. That is stated in
+`docs/ENGINE_VERIFICATION.md` rather than glossed. The offscreen branch needs no
+window at all and is the path that will work first on a machine with a driver.
 
 ## Current environment constraint
 

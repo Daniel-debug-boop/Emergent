@@ -4,26 +4,53 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace emergent {
 static VkInstance asInstance(void* p){ return reinterpret_cast<VkInstance>(p); }
-static VkPhysicalDevice asPhysical(void* p){ return reinterpret_cast<VkPhysicalDevice>(p); }
 static VkDevice asDevice(void* p){ return reinterpret_cast<VkDevice>(p); }
 static VkQueue asQueue(void* p){ return reinterpret_cast<VkQueue>(p); }
 static VkCommandPool asPool(void* p){ return reinterpret_cast<VkCommandPool>(p); }
-static VmaAllocator asAllocator(void* p){ return reinterpret_cast<VmaAllocator>(p); }
-
-bool VulkanBackend::initialize(){
+static VmaAllocator asAllocator(void* p){ return reinterpret_cast<VmaAllocator>(p); }bool VulkanBackend::initialize(const VulkanInitOptions &options){
     caps_ = {};
     VkResult r = volkInitialize();
     if (r != VK_SUCCESS) { caps_.error = "volkInitialize failed: " + std::to_string(r); return false; }
     caps_.loader = true;
     VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO,nullptr,"EMERGENT",VK_MAKE_VERSION(2,0,0),"EMERGENT Native",VK_MAKE_VERSION(2,0,0),VK_API_VERSION_1_3};
-    VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,nullptr,0,&ai,0,nullptr,0,nullptr};
+    // WSI extensions can only be requested here. A window attached after
+    // vkCreateInstance would find no surface extension in the instance and no
+    // amount of fixing at swapchain-creation time would help, so whether to
+    // ask for them has to be decided before this call.
+    std::vector<const char*> instanceExtensions;
+    if (options.wantSurface) {
+        instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    }
+    // Platform surface extensions come from the SurfaceProvider rather than
+    // from a #if on this platform. A provider is the only thing that knows
+    // which window system it will be asked about, and hard-coding a guess here
+    // is how a build ends up enabling an extension for a platform nobody is
+    // running on while missing the one they are.
+    for (const char* ext : options.extraInstanceExtensions) {
+        if (ext == nullptr) continue;
+        // Deduplicated because VK_KHR_surface is requested above whenever
+        // wantSurface is set, and a provider listing it is entirely reasonable
+        // -- it is the extension its own createVulkanSurface() needs. Vulkan
+        // requires the enabled extension names to be unique, and a duplicate
+        // is a vkCreateInstance failure with a validation message nobody
+        // reads. Cheap to prevent, tedious to debug.
+        bool already = false;
+        for (const char* existing : instanceExtensions) {
+            if (std::strcmp(existing, ext) == 0) { already = true; break; }
+        }
+        if (!already) instanceExtensions.push_back(ext);
+    }
+    VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,nullptr,0,&ai,
+                             static_cast<uint32_t>(instanceExtensions.size()), instanceExtensions.empty() ? nullptr : instanceExtensions.data(),
+                             0,nullptr};
     VkInstance instance = VK_NULL_HANDLE;
     r = vkCreateInstance(&ici,nullptr,&instance);
-    if(r != VK_SUCCESS){ caps_.error="vkCreateInstance failed: "+std::to_string(r); return false; }
+    if(r != VK_SUCCESS){ caps_.error="vkCreateInstance failed: " + std::to_string(r); return false; }
     volkLoadInstance(instance); instance_=instance; caps_.instance=true;
     uint32_t count=0; vkEnumeratePhysicalDevices(instance,&count,nullptr);
     if(!count){ caps_.error="No Vulkan physical device"; shutdown(); return false; }
@@ -66,7 +93,35 @@ NativeGpuRenderStats VulkanBackend::renderBootstrap(uint32_t width,uint32_t heig
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO,nullptr,0,nullptr,nullptr,1,&cmd,0,nullptr}; r=vkQueueSubmit(asQueue(queue_),1,&si,VK_NULL_HANDLE); if(r==VK_SUCCESS) r=vkQueueWaitIdle(asQueue(queue_)); vmaDestroyImage(asAllocator(allocator_),image,allocation); if(r!=VK_SUCCESS){s.error="GPU submission failed: "+std::to_string(r);return s;} s.executed=true; s.submit_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(); return s;
 }
 
+void* VulkanBackend::createOffscreenSurface(uint32_t width, uint32_t height, std::string &error){
+    error.clear();
+    if(!initialized_){ error="native Vulkan backend not initialized"; return nullptr; }
+    if(width==0 || height==0){ error="offscreen surface needs a non-zero size"; return nullptr; }
+    // This is a plain VkImage, not a VkSurfaceKHR. It exists so the renderer
+    // has a render target with no window attached, which is the mode the test
+    // suite and a headless server build use. Deliberately not wrapped as a
+    // surface: a fake surface would go through the swapchain path and report
+    // as presenting to a display that does not exist.
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,nullptr,0,VK_IMAGE_TYPE_2D,VK_FORMAT_R8G8B8A8_UNORM,{width,height,1},1,1,VK_SAMPLE_COUNT_1_BIT,VK_IMAGE_TILING_OPTIMAL,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_SHARING_MODE_EXCLUSIVE,0,nullptr,VK_IMAGE_LAYOUT_UNDEFINED};
+    VmaAllocationCreateInfo aci{}; aci.usage=VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    VkImage image=VK_NULL_HANDLE; VmaAllocation allocation=nullptr;
+    VkResult r=vmaCreateImage(asAllocator(allocator_),&ici,&aci,&image,&allocation,nullptr);
+    if(r!=VK_SUCCESS){ error="offscreen vmaCreateImage failed: "+std::to_string(r); return nullptr; }
+    // A two-word handle would need a container to live in; the renderer keeps
+    // its own, so this hands back the image and the caller resolves the
+    // allocation through the allocator. Returning the image alone keeps the
+    // backend free of any renderer state.
+    offscreen_image_=image; offscreen_allocation_=allocation; offscreen_width_=width; offscreen_height_=height;
+    return image;
+}
+
+void VulkanBackend::destroyOffscreenSurface(){
+    if(offscreen_image_ && offscreen_allocation_) vmaDestroyImage(asAllocator(allocator_),reinterpret_cast<VkImage>(offscreen_image_),reinterpret_cast<VmaAllocation>(offscreen_allocation_));
+    offscreen_image_=VK_NULL_HANDLE; offscreen_allocation_=nullptr; offscreen_width_=0; offscreen_height_=0;
+}
+
 void VulkanBackend::shutdown(){
+    destroyOffscreenSurface();
     if(allocator_){vmaDestroyAllocator(asAllocator(allocator_)); allocator_=nullptr;}
     if (device_ && command_pool_) vkDestroyCommandPool(asDevice(device_), asPool(command_pool_), nullptr);
     command_pool_ = nullptr;

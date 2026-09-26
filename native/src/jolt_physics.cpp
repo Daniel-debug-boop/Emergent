@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
 
 #include <memory>
+#include <vector>
 
 namespace {
 using namespace JPH;
@@ -82,6 +83,12 @@ struct JoltPhysicsWorld::Impl {
     std::unique_ptr<JPH::TempAllocatorImpl> allocator;
     std::unique_ptr<JPH::JobSystemThreadPool> jobs;
     JPH::BodyID first_dynamic;
+    // Handle table. A BodyID is a compact index into Jolt's own storage but is
+    // opaque to callers and is not guaranteed to stay valid across body
+    // removal, so the world hands out indices into this vector instead and
+    // keeps the mapping in one place.
+    std::vector<JPH::BodyID> handles;
+    int primary_dynamic = -1;
     bool initialized = false;
 };
 
@@ -114,6 +121,8 @@ bool JoltPhysicsWorld::initialize() {
 
     impl_->physics->Init(kMaxBodies, 0, 1024, 1024, *impl_->broad_phase, *impl_->object_vs_bp, *impl_->object_pair);
     impl_->first_dynamic = JPH::BodyID();
+    impl_->handles.clear();
+    impl_->primary_dynamic = -1;
     impl_->initialized = true;
 
     // Ground plane plus a body resting above it, so a fresh world is already
@@ -161,14 +170,18 @@ bool JoltPhysicsWorld::createBox(float x, float y, float z, float halfExtent, bo
 }
 
 bool JoltPhysicsWorld::createBoxExtents(float x, float y, float z, float hx, float hy, float hz, bool dynamic) {
-    if (!impl_->initialized) return false;
+    return addBox(x, y, z, hx, hy, hz, dynamic) >= 0;
+}
+
+int JoltPhysicsWorld::addBox(float x, float y, float z, float hx, float hy, float hz, bool dynamic) {
+    if (!impl_->initialized) return -1;
     // A zero or negative extent produces a degenerate shape that Jolt may
     // accept and then behave unpredictably, so reject it up front.
-    if (!(hx > 0.0f) || !(hy > 0.0f) || !(hz > 0.0f)) return false;
+    if (!(hx > 0.0f) || !(hy > 0.0f) || !(hz > 0.0f)) return -1;
 
     JPH::BoxShapeSettings shape_settings(JPH::Vec3(hx, hy, hz));
     JPH::ShapeSettings::ShapeResult shape = shape_settings.Create();
-    if (shape.HasError()) return false;
+    if (shape.HasError()) return -1;
 
     JPH::BodyCreationSettings settings(
         shape.Get(),
@@ -187,12 +200,65 @@ bool JoltPhysicsWorld::createBoxExtents(float x, float y, float z, float hx, flo
 
     JPH::BodyInterface &bodies = impl_->physics->GetBodyInterface();
     JPH::Body *body = bodies.CreateBody(settings);
-    if (body == nullptr) return false;
+    if (body == nullptr) return -1;
 
     const JPH::BodyID id = body->GetID();
     bodies.AddBody(id, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     if (dynamic && impl_->first_dynamic.IsInvalid()) impl_->first_dynamic = id;
+    if (dynamic && impl_->primary_dynamic < 0) impl_->primary_dynamic = static_cast<int>(impl_->handles.size());
+
+    const int handle = static_cast<int>(impl_->handles.size());
+    impl_->handles.push_back(id);
+    return handle;
+}
+
+bool JoltPhysicsWorld::bodyPosition(int handle, float (&out)[3]) const {
+    if (!impl_->initialized || handle < 0 || static_cast<size_t>(handle) >= impl_->handles.size()) return false;
+    const JPH::RVec3 p = impl_->physics->GetBodyInterface().GetPosition(impl_->handles[static_cast<size_t>(handle)]);
+    out[0] = p.GetX();
+    out[1] = p.GetY();
+    out[2] = p.GetZ();
     return true;
+}
+
+bool JoltPhysicsWorld::bodyVelocity(int handle, float (&out)[3]) const {
+    if (!impl_->initialized || handle < 0 || static_cast<size_t>(handle) >= impl_->handles.size()) return false;
+    const JPH::Vec3 v = impl_->physics->GetBodyInterface().GetLinearVelocity(impl_->handles[static_cast<size_t>(handle)]);
+    out[0] = v.GetX();
+    out[1] = v.GetY();
+    out[2] = v.GetZ();
+    return true;
+}
+
+bool JoltPhysicsWorld::setBodyVelocity(int handle, float x, float y, float z) {
+    if (!impl_->initialized || handle < 0 || static_cast<size_t>(handle) >= impl_->handles.size()) return false;
+    JPH::BodyInterface &bodies = impl_->physics->GetBodyInterface();
+    const JPH::BodyID id = impl_->handles[static_cast<size_t>(handle)];
+    if (!bodies.IsAdded(id)) return false;
+    // A sleeping body ignores a velocity write until it is woken, so wake it
+    // first. Skipping this is why "the character stops responding after
+    // standing still" is such a common engine bug.
+    bodies.ActivateBody(id);
+    bodies.SetLinearVelocity(id, JPH::Vec3(x, y, z));
+    return true;
+}
+
+bool JoltPhysicsWorld::setBodyPosition(int handle, float x, float y, float z) {
+    if (!impl_->initialized || handle < 0 || static_cast<size_t>(handle) >= impl_->handles.size()) return false;
+    JPH::BodyInterface &bodies = impl_->physics->GetBodyInterface();
+    const JPH::BodyID id = impl_->handles[static_cast<size_t>(handle)];
+    if (!bodies.IsAdded(id)) return false;
+    // Teleport, not a swept move: anything the body overlapped is left
+    // untouched, so this is only ever correct for a reset.
+    bodies.SetPositionAndRotation(id, JPH::RVec3(x, y, z), JPH::Quat::sIdentity(),
+                                  JPH::EActivation::Activate);
+    bodies.SetLinearVelocity(id, JPH::Vec3::sZero());
+    bodies.SetAngularVelocity(id, JPH::Vec3::sZero());
+    return true;
+}
+
+int JoltPhysicsWorld::primaryDynamicBody() const {    if (!impl_->initialized) return -1;
+    return impl_->primary_dynamic;
 }
 
 float JoltPhysicsWorld::firstDynamicY() const {

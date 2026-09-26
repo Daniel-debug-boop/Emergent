@@ -7,12 +7,56 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace emergent {
 
+NativeEngine::NativeEngine() {
+    // The headless renderer is the default so that no code path in the engine
+    // ever has to check for a null renderer. An engine asked to run frames and
+    // unable to draw them reports that in exactly one place.
+    nullRenderer_ = std::make_unique<NullRenderBackend>();
+    renderer_ = nullRenderer_.get();
+}
+
+NativeEngine::~NativeEngine() { shutdown(); }
+
+bool NativeEngine::configureFrameLoop(const FrameLoopConfig &config) {
+    loopConfig_ = config;
+    return true;
+}
+
+bool NativeEngine::reconfigureFrameLoop(const FrameLoopConfig &config) {
+    closeRenderTarget();
+    loopConfig_ = config;
+    if (!loop_.initialize(config)) {
+        std::cerr << "frame loop reconfiguration failed: " << loop_.lastError() << "\n";
+        return false;
+    }
+    clockPrimed_ = false;
+    return true;
+}
+
+void NativeEngine::primeClock() {
+    lastFrameNanos_ = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    clockPrimed_ = true;
+}
+
 bool NativeEngine::initialize() {
     profile::setProgramName("emergent_native");
-    const bool vk = vk_.initialize();
+
+    // The surface, if there is one, has to be folded into the instance
+    // creation request. Attaching a window later would find an instance with
+    // no surface extension in it.
+    VulkanInitOptions vkOptions;
+    vkOptions.wantSurface = surface_ != nullptr;
+    if (surface_ != nullptr) {
+        vkOptions.extraInstanceExtensions = surface_->requiredInstanceExtensions();
+    }
+    const bool vk = vk_.initialize(vkOptions);
     const bool physics = physics_.initialize();
     const bool ecs = ecs_.initialize();
     const bool audio = audio_.initialize();
@@ -20,7 +64,167 @@ bool NativeEngine::initialize() {
     // engine that silently ships without a skeleton is worse than one that
     // refuses to start.
     const bool animation = anim_.build();
-    return vk && physics && ecs && audio && animation;
+    // The frame loop owns its own physics world, so it is initialised here
+    // rather than lazily: a caller that reaches for loop() after a true
+    // initialize() gets a running loop, not an empty one.
+    const bool loop = loop_.initialize(loopConfig_);
+    if (!loop) {
+        std::cerr << "frame loop initialization failed: " << loop_.lastError() << "\n";
+    }
+    primeClock();
+    return vk && physics && ecs && audio && animation && loop;
+}
+
+bool NativeEngine::updateFrame() {
+    if (!loop_.ready()) return false;
+    if (!clockPrimed_) primeClock();
+
+    const uint64_t now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    // Monotonic, so this cannot go negative. The subtraction is done in
+    // unsigned and the first frame is skipped via primeClock, which is what
+    // stops the engine integrating the process's whole uptime as one enormous
+    // frame on its very first tick.
+    const double delta = static_cast<double>(now - lastFrameNanos_) * 1e-9;
+    lastFrameNanos_ = now;
+
+    const profile::Scope scope("frame.total");
+    FrameState state;
+    if (!loop_.tick(delta, input_, state)) return false;
+    if (renderTargetOpen_) {
+        renderer_->beginFrame();
+        renderer_->drawFrame(state);
+        renderer_->endFrame();
+    }
+    return true;
+}
+
+uint32_t NativeEngine::runHeadless(uint32_t frames, double delta) {
+    if (!loop_.ready()) return 0;
+    if (!renderTargetOpen_) {
+        // Still run the frames: a caller asking for a headless run wants the
+        // simulation, and skipping it because no window is attached would make
+        // "headless" mean "does nothing".
+        uint32_t ran = 0;
+        FrameState state;
+        for (uint32_t i = 0; i < frames; ++i) {
+            if (!loop_.tick(delta, input_, state)) break;
+            ++ran;
+        }
+        return ran;
+    }
+    uint32_t ran = 0;
+    FrameState state;
+    for (uint32_t i = 0; i < frames; ++i) {
+        if (!loop_.tick(delta, input_, state)) break;
+        renderer_->beginFrame();
+        renderer_->drawFrame(state);
+        renderer_->endFrame();
+        ++ran;
+    }
+    return ran;
+}
+
+uint32_t NativeEngine::runRealtime(double seconds) {
+    if (!loop_.ready() || !(seconds > 0.0)) return 0;
+    primeClock();
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                     std::chrono::duration<double>(seconds));
+    uint32_t ran = 0;
+    FrameState state;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!loop_.tick(loopConfig_.fixedDelta, input_, state)) break;
+        if (renderTargetOpen_) {
+            renderer_->beginFrame();
+            renderer_->drawFrame(state);
+            renderer_->endFrame();
+        }
+        ++ran;
+
+        // Sleep out the remainder of the frame. Without this the loop spins as
+        // fast as the CPU allows and the only thing limiting it is the
+        // scheduler, which is not pacing -- and a soak test that does this
+        // measures nothing useful, because it is measuring the machine rather
+        // than the engine.
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        const auto next = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    std::chrono::duration<double>(static_cast<double>(ran + 1) * loopConfig_.fixedDelta));
+        if (next > now) {
+            std::this_thread::sleep_for(next - now);
+        }
+    }
+    return ran;
+}
+
+bool NativeEngine::attachRenderBackend(RenderBackend *backend) {
+    closeRenderTarget();
+    if (backend == nullptr) {
+        renderer_ = nullRenderer_.get();
+        return true;
+    }
+    renderer_ = backend;
+    return true;
+}
+
+bool NativeEngine::enableVulkanRenderer() {
+    closeRenderTarget();
+    lastRenderError_.clear();
+    if (!vk_.initialized()) {
+        // Two different failures with the same symptom, so they get different
+        // messages: the caller skipped initialize(), or initialize() ran and
+        // found no device. "Call initialize() first" would be the wrong advice
+        // for a machine with no GPU driver.
+        const bool attempted = !vk_.capabilities().error.empty() || vk_.capabilities().loader;
+        lastRenderError_ = attempted ? ("no Vulkan device is available: " + vk_.capabilities().error +
+                                        " (the renderer is built and will work where a driver exists)")
+                                     : "the Vulkan device is not up; enableVulkanRenderer() must follow initialize()";
+        return false;
+    }
+    auto renderer = std::make_unique<VulkanRenderBackend>();
+    if (!renderer->initialize(vk_, VulkanInitOptions{})) {
+        lastRenderError_ = renderer->stats().status;
+        return false;
+    }
+    vulkanRenderer_ = std::move(renderer);
+    renderer_ = vulkanRenderer_.get();
+    return true;
+}
+
+bool NativeEngine::renderTo(uint32_t width, uint32_t height, SurfaceProvider *surface) {
+    lastRenderError_.clear();
+    if (width == 0 || height == 0) {
+        lastRenderError_ = "framebuffer size must be non-zero";
+        return false;
+    }
+    if (surface != nullptr && !vk_.capabilities().instance) {
+        // A surface supplied here, after initialize(), cannot have influenced
+        // the instance's extension list, so the renderer cannot create a
+        // swapchain for it. Saying so beats a renderer that quietly goes
+        // offscreen and looks like it worked.
+        lastRenderError_ =
+            "a surface was supplied after initialize(), so its platform instance extensions were never "
+            "requested; call setSurfaceProvider() before initialize()";
+        return false;
+    }
+    if (!renderer_->open(width, height, surface)) {
+        lastRenderError_ = renderer_->stats().status;
+        renderTargetOpen_ = false;
+        return false;
+    }
+    renderTargetOpen_ = true;
+    return true;
+}
+
+void NativeEngine::closeRenderTarget() {
+    if (renderTargetOpen_ && renderer_ != nullptr) {
+        renderer_->close();
+    }
+    renderTargetOpen_ = false;
 }
 
 int NativeEngine::runSelfTest() {
@@ -49,6 +253,44 @@ int NativeEngine::runSelfTest() {
     }
 
     std::cout << "miniaudio: " << (audio_.initialized() ? "ACTIVE" : "FAILED") << "\n";
+
+    // The frame loop, run the way a caller would run it. This is here so that
+    // every CI run of emergent_native actually drives physics and animation
+    // together, rather than the loop existing only in a test binary that
+    // nothing else in the tree executes.
+    {
+        if (!loop_.ready()) {
+            std::cout << "frame loop: FAILED " << loop_.lastError() << "\n";
+        } else {
+            InputState move;
+            move.moveZ = 1.0f;
+            FrameState state;
+            const uint32_t ran = runHeadless(120, 1.0 / 60.0);
+            const FrameStats &st = loop_.stats();
+
+            // A second pass at a different frame rate, to show the fixed step
+            // is what is being counted and not the frame count. 120 frames of
+            // 1/120s is one second of real time, the same as the 120 frames of
+            // 1/60s above, and must produce the same number of steps.
+            loop_.reset();
+            int slowSteps = 0;
+            for (int i = 0; i < 60; ++i) {
+                if (!loop_.tick(1.0 / 30.0, move, state)) break;
+                slowSteps += state.physicsSteps;
+            }
+            const int fastSteps = 120;  // 120 frames at exactly the fixed rate
+
+            const bool ok = ran == 120 && st.alpha >= 0.0 && st.alpha < 1.0 && slowSteps == fastSteps &&
+                            st.steps > 0 && st.simulatedSeconds > 0.0;
+            std::printf("frame loop: %s frames=%u steps=%d sim=%.2fs alpha=%.17g clip=%.*s "
+                        "pos=(%.2f,%.2f,%.2f) joints=%d boxes=%d phys=%.3fms anim=%.3fms\n",
+                        ok ? "ACTIVE" : "FAILED", ran, st.steps, st.simulatedSeconds,
+                        static_cast<double>(st.alpha), static_cast<int>(loop_.currentClip().size()),
+                        loop_.currentClip().data(), static_cast<double>(state.playerPosition[0]),
+                        static_cast<double>(state.playerPosition[1]), static_cast<double>(state.playerPosition[2]),
+                        state.jointCount, state.sceneBoxCount, st.physicsMs, st.animationMs);
+        }
+    }
 
     // Animation: play a walk cycle and resolve real model-space joint
     // matrices, so the ozz runtime is exercised rather than merely linked.
@@ -151,6 +393,17 @@ bool NativeEngine::readContent(std::string_view name, std::vector<uint8_t> &out)
 double NativeEngine::contentCompressionRatio() const { return content_.compressionRatio(); }
 
 void NativeEngine::shutdown() {
+    // Reverse of construction order. The renderer closes before the device
+    // goes away, because a swapchain destroyed after its device is a
+    // use-after-free inside the driver.
+    closeRenderTarget();
+    if (vulkanRenderer_) {
+        vulkanRenderer_->shutdownDevice();
+        vulkanRenderer_.reset();
+    }
+    renderer_ = nullRenderer_.get();
+    nullRenderer_.reset();
+    loop_.shutdown();
     audio_.shutdown();
     ecs_.shutdown();
     physics_.shutdown();

@@ -335,6 +335,79 @@ if(NOT TARGET ozz_animation AND EMERGENT_OZZ_DIR AND EXISTS "${EMERGENT_OZZ_DIR}
 endif()
 
 # ---------------------------------------------------------------------------
+# Frame loop
+# ---------------------------------------------------------------------------
+# The fixed/variable timestep loop, split into its own library rather than
+# folded into the engine executable. Two reasons, both of them about being
+# able to check claims: the behaviour tests link it without pulling in Vulkan,
+# the render backend or the ten upstream libraries, and a build configured with
+# -DEMERGENT_BUILD_ENGINE=OFF still gets a testable frame loop.
+add_library(emergent_frame_loop STATIC
+  native/src/frame_loop.cpp)
+target_include_directories(emergent_frame_loop PUBLIC native/include)
+target_link_libraries(emergent_frame_loop PUBLIC emergent_physics emergent_animation emergent_profiling)
+set_target_properties(emergent_frame_loop PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_frame_loop PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+# The renderer interface, its headless implementation and the SPIR-V loader.
+# Kept apart from the Vulkan renderer itself, which needs a Vulkan SDK, so
+# that the validation logic a renderer depends on is testable without one.
+add_library(emergent_render STATIC
+  native/src/render_backend.cpp)
+target_include_directories(emergent_render PUBLIC native/include)
+target_link_libraries(emergent_render PUBLIC emergent_frame_loop)
+set_target_properties(emergent_render PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_render PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_frame_loop_test native/tests/frame_loop_test.cpp)
+target_link_libraries(emergent_frame_loop_test PRIVATE emergent_render)
+if(UNIX)
+  target_compile_options(emergent_frame_loop_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_frame_loop COMMAND emergent_frame_loop_test)
+
+# ---------------------------------------------------------------------------
+# Shader compilation
+# ---------------------------------------------------------------------------
+# The GLSL in native/shaders is compiled to SPIR-V at build time when glslc is
+# available (it ships with the Vulkan SDK and with shaderc). It is optional on
+# purpose: the engine, the tests and CI must all build and run on a machine
+# with no shader toolchain, and the renderer already reports a missing module
+# by name rather than failing to start. A build with glslc gets a renderer
+# that can actually draw.
+find_program(EMERGENT_GLSLC NAMES glslc glslangValidator)
+
+set(EMERGENT_SHADER_OUTPUTS)
+foreach(stage vert frag)
+  if(EMERGENT_GLSLC)
+    set(_in ${CMAKE_CURRENT_SOURCE_DIR}/native/shaders/scene.${stage})
+    set(_out ${CMAKE_CURRENT_SOURCE_DIR}/native/shaders/scene.${stage}.spv)
+    if(EMERGENT_GLSLC MATCHES "glslangValidator$")
+      set(_cmd ${EMERGENT_GLSLC} -V ${_in} -o ${_out})
+    else()
+      set(_cmd ${EMERGENT_GLSLC} -fshader-stage=${stage} ${_in} -o ${_out})
+    endif()
+    add_custom_command(OUTPUT ${_out}
+      COMMAND ${_cmd}
+      DEPENDS ${_in}
+      COMMENT "Compiling scene.${stage} to SPIR-V"
+      VERBATIM)
+    list(APPEND EMERGENT_SHADER_OUTPUTS ${_out})
+  endif()
+endforeach()
+
+if(EMERGENT_GLSLC)
+  add_custom_target(emergent_shaders ALL DEPENDS ${EMERGENT_SHADER_OUTPUTS})
+  message(STATUS "EMERGENT: shader compiler found (${EMERGENT_GLSLC}); native/shaders will be compiled to SPIR-V.")
+else()
+  message(STATUS "EMERGENT: no glslc/glslangValidator found. The engine, tests and CI build and run without it; VulkanRenderBackend will report 'shader module unavailable' instead of drawing.")
+endif()
+
+# ---------------------------------------------------------------------------
 # Full native engine target
 # ---------------------------------------------------------------------------
 # The engine executable still needs seven more upstream libraries (meshoptimizer,
@@ -347,7 +420,7 @@ endif()
 option(EMERGENT_BUILD_ENGINE "Build the full Vulkan engine executable" ON)
 
 if(NOT EMERGENT_BUILD_ENGINE)
-  message(STATUS "EMERGENT: engine target disabled (-DEMERGENT_BUILD_ENGINE=OFF); building the verified physics subsystem only.")
+  message(STATUS "EMERGENT: engine target disabled (-DEMERGENT_BUILD_ENGINE=OFF); building the verified physics, animation, frame loop and renderer-interface subsystems only.")
   return()
 endif()
 
@@ -379,13 +452,17 @@ add_executable(emergent_native
   native/src/main.cpp
   native/src/engine.cpp
   native/src/vulkan_backend.cpp
+  native/src/vulkan_render.cpp
   native/src/optimization.cpp
   native/src/navigation.cpp
   native/src/ecs_world.cpp
   native/src/audio.cpp
   native/src/vma_impl.cpp)
 target_include_directories(emergent_native PRIVATE native/include)
-target_link_libraries(emergent_native PRIVATE emergent_physics emergent_animation emergent_assets emergent_profiling meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation ozz_animation_offline libzstd_static)
+target_link_libraries(emergent_native PRIVATE emergent_frame_loop emergent_render emergent_physics emergent_animation emergent_assets emergent_profiling meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation ozz_animation_offline libzstd_static)
+if(EMERGENT_GLSLC)
+  add_dependencies(emergent_native emergent_shaders)
+endif()
 target_compile_definitions(emergent_native PRIVATE EMERGENT_UPSTREAM_ONLY=1)
 
 if(UNIX)
@@ -402,3 +479,7 @@ endif()
 
 add_test(NAME emergent_native_self_test COMMAND emergent_native)
 add_test(NAME emergent_native_benchmark_smoke COMMAND emergent_benchmark)
+# The frame loop as the shipped binary runs it, not just as a test drives it.
+# A loop that only works under a test harness is not a loop.
+add_test(NAME emergent_native_frame_loop COMMAND emergent_native --frames 300 --walk)
+add_test(NAME emergent_native_frame_loop_realtime COMMAND emergent_native --realtime 0.25 --walk)
