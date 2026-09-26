@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 2026-09-26 — the crowd and the traffic are solid
+
+The player walked through everyone. NPCs had no colliders at all, and cars drove
+through the player and through each other. `setAgentBox` existed in the physics
+layer, was covered by a test, and was called from nowhere in the game.
+
+Agents within 260 units of the player now get kinematic bodies, keyed by entity
+and synced every frame as a set, so one that leaves the radius has its body
+removed and one that enters gets one created. Kinematic rather than dynamic on
+purpose: NPCs follow scripted goals and cars follow lanes, so simulating them
+with forces would be slower, less controllable, and would produce a crowd that
+shoves the player around rather than one the player has to walk around.
+
+The radius is a reachability bound, not a quality dial — nothing beyond 260
+units can be touched, so a collider out there costs solver time and buys
+nothing. A budget of 64 bodies, filled nearest-first, bounds the cost in a dense
+district; the agents that fall off the end are the ones already out of reach.
+
+**Measured.** Walking straight into an NPC, the closest approach is **2.07
+units** against a geometric minimum of 1.60 (player radius 1.15 + NPC half-width
+0.45) plus the collider offset — the player is stopped by the body rather than
+passing through it. Frame cost across three 300-frame benchmark runs: 4223ms
+with the crowd solid against 4174ms without, a difference of about 0.16ms per
+frame and inside the run-to-run spread of ±130ms. This harness advances a
+virtual clock, so its reported FPS is a function of the frame interval rather
+than of throughput and is not a performance figure.
+
+A new runtime test walks the real game loop into an NPC and asserts the closest
+approach never falls below 1.2 units, which a world without colliders fails at
+zero.
+
 ## 2026-09-26 — a real character controller, and terrain you can stand on
 
 The player collided with the world through `blockedPlayer(x, z)`: an

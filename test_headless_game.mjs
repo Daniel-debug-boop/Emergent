@@ -237,6 +237,34 @@ await test('the player is blocked by buildings, and stands on the terrain', asyn
   assertGLHealthy(gl, 'colliding with a building');
 });
 
+await test('the player cannot walk through the crowd', async () => {
+  // NPCs and cars have kinematic bodies near the player. Walking is [sin(yaw),
+  // cos(yaw)] scaled by -1 for W, so a heading of a + PI travels along
+  // (sin a, cos a) — the direction from the start position to the NPC.
+  const { gl } = await boot({ frames: 10 });
+  const game = globalThis.EMERGENT;
+  const n = game.world.npcs[347];
+  assert(n, 'the world has an NPC to walk into');
+  const ang = 0.9;
+  game.teleport(n.x - Math.sin(ang) * 30, n.z - Math.cos(ang) * 30);
+  game.look(ang + Math.PI, -0.24);
+  await pumpFrames(3);
+  const startGap = Math.hypot(game.player.x - n.x, game.player.z - n.z);
+  assert(startGap > 20, `the player starts clear of the NPC (${startGap.toFixed(1)}m)`);
+  fireGlobal('keydown', { key: 'w' });
+  let minGap = Infinity;
+  for (let i = 0; i < 60; i++) {
+    await pumpFrames(1);
+    minGap = Math.min(minGap, Math.hypot(game.player.x - n.x, game.player.z - n.z));
+  }
+  fireGlobal('keyup', { key: 'w' });
+  // A body would let the gap reach zero. Without one the closest approach is
+  // the player radius plus the NPC half-width, 1.60, plus the collider offset.
+  assert(minGap > 1.2, `the player did not pass through the NPC (closest ${minGap.toFixed(2)}m)`);
+  assert(minGap < 6, `and actually reached it rather than never closing (closest ${minGap.toFixed(2)}m)`);
+  assertGLHealthy(gl, 'colliding with a crowd');
+});
+
 await test('crossing the world streams chunks in and out', async () => {
   const { gl } = await boot({ frames: 10 });
   const game = globalThis.EMERGENT;
