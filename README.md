@@ -17,9 +17,21 @@ manifest and writes `dist/build.json`.
 
 ## Player loop
 
-Explore the world → discover districts → find businesses → pick up an emergent delivery → travel to the target → deliver → receive money/progression → alter local business stock → continue exploring.
+Explore the world → discover districts → take a job → walk or drive to each stage in turn → complete it → get paid and rank up → the city's stock and your standing move → the next job is drawn from whatever the world now needs.
 
-The delivery target is selected from world state. Businesses with low stock can become mission targets, and successful delivery changes their stock, reputation and openness.
+Jobs are **data-driven**, not hard-coded. `missions.mjs` declares four
+archetypes — `delivery`, `restock`, `survey` and `respond` — as stage templates
+with a reward curve each. A job is a list of concrete stages, and four stage
+types cover them: reach a place, interact with something, hold a position for a
+while, or stay away for a while. Which jobs are on offer is read from world
+state: a delivery needs a business with surplus and one that is short, a
+restock needs a business that has run down, a response needs a live incident.
+
+The economy underneath is a real balance rather than a floor. Every business
+consumes stock and resupplies logistically — strongly when its shelves are
+empty, not at all when they are full — and each has its own supply and
+popularity, so businesses settle at different levels. Some districts are short.
+Those are the jobs.
 
 ## Controls
 
@@ -168,6 +180,7 @@ npm run check     # syntax check
 | World | `npm run test:world` | Generation is deterministic per seed and varies across seeds; required populations exist; terrain is continuous, walkable and has relief |
 | Math | `npm run test:math` | Projection, view, multiply and point-transform algebra, including degenerate cases |
 | Culling | `npm run test:culling` | Frustum plane extraction and AABB rejection, including the degenerate cases |
+| Missions | `npm run test:missions` | The job rules: stage types, proximity vs keypress, expiry ordering, reward curve, archetype availability, legacy save shapes |
 | Physics | `npm run test:physics` | The real Rapier engine: swept collision at speed, wall sliding, step-up, slope limits, jump gating, determinism, terrain streaming, no body leaks |
 | Project | `npm run test:project` | Required renderer/simulation systems exist in source, HTML wiring is intact, terrain is finite |
 | Tooling | `npm run test:tooling` | Static server rejects path traversal and serves correct MIME types; the build emits every file the page needs |

@@ -6,6 +6,10 @@ import {
   removeStaticBox, setAgentBox, removeAgent, buildHeightfield, teleportPlayer,
   surfaceHeightAt, DEFAULT_TUNING
 } from './physics.mjs';
+import {
+  ARCHETYPE_IDS, buildMission, currentStage, advanceMission, objectiveText,
+  pickArchetype, stageDistance
+} from './missions.mjs';
 
 'use strict';
 
@@ -110,6 +114,11 @@ let simulatedNpcCount = 0;
 let streamGenerated = 0;
 let streamFreed = 0;
 let currentMission = null;
+// Set by interact() and consumed by the next mission update. Keeping the press
+// in one place means the stage rules decide whether it counts, rather than
+// every call site that happens to be near a target.
+let pendingInteract = false;
+let pendingInteractId = undefined;
 let toastTimer = 0;
 let debugVisible = false;
 let firstPerson = false;
@@ -597,8 +606,8 @@ function buildDynamicScene(force=false) {
   if(firstPerson) pushBox(arr,player.x,y,player.z,0.45,0.9,0.32,[0.18,0.32,0.68]);
   else pushNpc(arr,player.x,player.z,9999,'service','idle',1);
   if(currentMission){
-    const mb=missionBuilding(currentMission.stage==='pickup'?currentMission.sourceId:currentMission.targetId);
-    if(mb){const my=terrainHeight(mb.x,mb.z,seed);pushCylinder(arr,mb.x,my,mb.z,0.7,5.5,[0.95,0.68,0.25],8);pushCylinder(arr,mb.x,my+5.5,mb.z,1.2,0.08,[1.0,0.78,0.30],8);}
+    const stage=currentStage(currentMission);
+    if(stage&&Number.isFinite(stage.x)){const my=terrainHeight(stage.x,stage.z,seed);pushCylinder(arr,stage.x,my,stage.z,0.7,5.5,[0.95,0.68,0.25],8);pushCylinder(arr,stage.x,my+5.5,stage.z,1.2,0.08,[1.0,0.78,0.30],8);}
   }
   gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.DYNAMIC_DRAW);dynamicVertexCount=arr.length/9;
   dynamicBuildTime=elapsed;lastDynamicX=player.x;lastDynamicZ=player.z;dynamicBuilds++;lastDynamicObjects=visibleObjects;
@@ -657,20 +666,22 @@ function drawScene(){
 }
 
 /**
- * Project the active mission building into screen space and draw a gold
- * chevron + distance ring above it on the 2D overlay. Skipped when the target
- * is behind the camera or when the simulation hasn't rendered yet.
+ * Project the current mission stage into screen space and draw a gold chevron
+ * + distance ring above it on the 2D overlay. Skipped when the target is behind
+ * the camera or when the simulation hasn't rendered yet. The marker follows the
+ * *stage*, not a fixed target building, which is what lets a job change where it
+ * is pointing without the renderer knowing anything about mission types.
  */
 function drawMissionMarker(){
   if(!currentMission||!lastPV)return;
-  const mb=missionBuilding(currentMission.stage==='pickup'?currentMission.sourceId:currentMission.targetId);
-  if(!mb)return;
-  const my=terrainHeight(mb.x,mb.z,seed)+mb.h+6;
-  const clip=transformPoint(lastPV,[mb.x,my,mb.z]);
+  const stage=currentStage(currentMission);
+  if(!stage||!Number.isFinite(stage.x))return;
+  const my=terrainHeight(stage.x,stage.z,seed)+6;
+  const clip=transformPoint(lastPV,[stage.x,my,stage.z]);
   if(clip[3]<=0.001)return; // behind the camera
   const sx=(clip[0]/clip[3]*0.5+0.5)*overlay.width;
   const sy=(1-(clip[1]/clip[3]*0.5+0.5))*overlay.height;
-  const dist=Math.hypot(player.x-mb.x,player.z-mb.z);
+  const dist=stageDistance(stage,player.x,player.z);
   overlayCtx.save();
   overlayCtx.strokeStyle='rgba(255,211,107,0.9)';
   overlayCtx.fillStyle='rgba(255,211,107,0.95)';
@@ -839,10 +850,24 @@ function updateBusinesses(dt){
   for(const b of world.businesses){
     const baseDemand=b.type==='market'?0.020:b.type==='cafe'?0.016:b.type==='service'?0.012:0.010;
     const weatherMod=world.weather===2?0.62:world.weather===1?0.82:1;
-    const demand=baseDemand*weatherMod*(0.72+world.economy*0.35);
-    if(b.open && rand()<dt*demand){b.stock-=0.15;b.customers++;b.revenue+=b.price*0.4;}
+    const demand=baseDemand*weatherMod*(0.72+world.economy*0.35)*(b.popularity||1);
+    if(b.open && rand()<dt*demand){b.stock-=0.6;b.customers++;b.revenue+=b.price*0.4;}
     if(b.stock<5)b.open=false;
-    if(b.stock<18 && rand()<dt*0.035)b.stock+=1.0;
+    // Passive resupply, logistic: it is strongest on an empty shelf and fades to
+    // nothing on a full one.
+    //
+    // This used to be a flat trickle that only applied below 18, which is a hard
+    // floor — the measured minimum stock across 714 businesses was exactly 18,
+    // pinned there by this line, in every seed and at every point in time. With
+    // a floor there is no such thing as a business in trouble, so the "low
+    // stock" half of the delivery design was unreachable and the player's
+    // deliveries moved goods between businesses that were all fine.
+    //
+    // A business now settles wherever its supply rate matches its consumption,
+    // and that differs per business, so the city has a real distribution: some
+    // districts are well served, some are not, and a delivery is how you fix
+    // the ones that are not.
+    if(b.stock<100)b.stock+=dt*0.010*(b.supply||1)*(1-b.stock/100);
     if(b.stock>22)b.open=true;
     b.price=clamp(0.75+world.economy*0.42+(25-Math.min(25,b.stock))*0.014,0.65,2.25);
     b.reputation=clamp(b.reputation+(b.open?0.0002:-0.0005),0.15,1.5);
@@ -865,18 +890,73 @@ function discoverDistricts(){
   }
 }
 
+/**
+ * Choose and build the next job from what the world can currently support.
+ *
+ * Availability is world state, not a constant: a delivery needs a stocked
+ * source and a short target, a restock needs a business that has run dry, a
+ * response needs a live incident. A job that could not be completed is not
+ * offered, which is the difference between "a delivery appeared" and "a job
+ * appeared that could be finished".
+ */
 function chooseMission(){
-  const open=world.businesses.filter(b=>b.open&&b.stock>25);
-  const targets=world.businesses.filter(b=>!b.open||b.stock<11);
-  if(!open.length||!targets.length){
-    const a=world.businesses[Math.floor(rand()*world.businesses.length)], bb=world.businesses[Math.floor(rand()*world.businesses.length)];
-    if(!a||!bb||a.id===bb.id)return;
-    currentMission={type:'delivery',stage:'pickup',sourceId:a.id,targetId:bb.id,crates:3,reward:30+player.rank*8,expires:180};
-    return;
+  // Shortage thresholds are relative to the distribution the generator
+  // produces (18..100 at birth) rather than absolute numbers the world may
+  // never reach. An absolute threshold that nothing satisfies does not create
+  // variety, it silently deletes two thirds of the job types.
+  const stocked=world.businesses.filter(b=>b.open&&b.stock>45);
+  const short=world.businesses.filter(b=>!b.open||b.stock<26);
+  const incidents=world.events.filter(e=>e.life>0&&e.severity>=0.2&&Number.isFinite(e.x)&&Number.isFinite(e.z));
+  const availability={
+    delivery:stocked.length>0&&short.length>0,
+    restock:short.length>0,
+    survey:world.districts.length>0,
+    respond:incidents.length>0
+  };
+  const archetype=pickArchetype(availability,rand);
+  if(!archetype)return;
+  currentMission=buildMission({
+    archetype,rank:player.rank,
+    resolve:(template)=>resolveMissionStage(template,archetype,{stocked,short,incidents})
+  });
+  if(currentMission)missionTimer=45;
+}
+
+/**
+ * Turn a stage template into a concrete stage with a real place to go.
+ *
+ * This is the seam between the world and the mission rules: the rules know
+ * what "interact at this position" means, and nothing about businesses.
+ */
+function resolveMissionStage(template,archetype,pool){
+  const building=b=>{const bl=missionBuilding(b.id);return bl||null;};
+  if(template.role==='source'){
+    const b=pool.stocked[Math.floor(rand()*pool.stocked.length)];if(!b)return null;
+    const bl=building(b);if(!bl)return null;
+    return {x:bl.x,z:bl.z,businessId:b.id,label:`Collect ${template.label.toLowerCase()} from ${b.type}`};
   }
-  let source=open[Math.floor(rand()*open.length)],target=targets[Math.floor(rand()*targets.length)];
-  for(let tries=0;tries<10 && source.id===target.id;tries++)target=targets[Math.floor(rand()*targets.length)];
-  currentMission={type:'delivery',stage:'pickup',sourceId:source.id,targetId:target.id,crates:3,reward:38+player.rank*9,expires:210};
+  if(template.role==='target'){
+    const b=pool.short[Math.floor(rand()*pool.short.length)];if(!b)return null;
+    const bl=building(b);if(!bl)return null;
+    return {x:bl.x,z:bl.z,businessId:b.id,label:`${template.label} at ${b.type}`,stock:b.stock};
+  }
+  if(template.role==='waypoint'){
+    // Somewhere to walk that is not where the player already is, so a survey
+    // circuit is a circuit and not a walk to the doorstep.
+    let best=null,bestScore=0;
+    for(let i=0;i<12;i++){
+      const d=world.districts[Math.floor(rand()*world.districts.length)];if(!d)continue;
+      const dist=Math.hypot(d.x-player.x,d.z-player.z);
+      if(dist>bestScore){bestScore=dist;best=d;}
+    }
+    if(!best)return null;
+    return {x:best.x,z:best.z,label:`Reach the ${best.type} survey point`};
+  }
+  if(template.role==='event'){
+    const e=pool.incidents[Math.floor(rand()*pool.incidents.length)];if(!e)return null;
+    return {x:e.x,z:e.z,label:archetype==='respond'?'Reach the incident':'Hold the scene'};
+  }
+  return null;
 }
 
 /**
@@ -890,28 +970,80 @@ function missionBuilding(id){
   return worldIndex.buildingById.get(b.buildingId)||null;
 }
 function missionDistance(id){const b=missionBuilding(id);return b?Math.hypot(player.x-b.x,player.z-b.z):Infinity;}
+/**
+ * Write the objective readout.
+ *
+ * Driven from the simulation rather than from `updateHUD` because the number
+ * that matters here is the live distance to the current stage, and the HUD only
+ * refreshes once a second — an objective counting down from 320m to 219m in
+ * one jump reads as a stale UI, not as a game.
+ */
+function updateObjective(){
+  if(!currentMission){$('objective').textContent='Explore the world — work will appear from local shortages and incidents.';return;}
+  const stage=currentStage(currentMission);
+  const d=stageDistance(stage,player.x,player.z);
+  $('objective').textContent=`${objectiveText(currentMission)} · ${Number.isFinite(d)?`${Math.round(d)}m`:'—'}`;
+}
+
+/**
+ * Mirror the current stage onto the legacy `stage`/`sourceId`/`targetId` fields.
+ *
+ * Those fields are read by the debug and test surface (`missionBuildingFor`),
+ * which predates the stage pipeline and resolves a mission to a single
+ * building. Keeping them in step means that surface follows the player around a
+ * multi-stage job instead of pointing at a leg that was left hours ago. Nothing
+ * in the game reads them; the game reads `currentStage()`.
+ */
+function syncMissionView(){
+  const stage=currentStage(currentMission);
+  if(!stage)return;
+  currentMission.stage=stage.type==='interact'?'pickup':'delivery';
+  currentMission.sourceId=stage.businessId;
+  currentMission.targetId=stage.businessId;
+  currentMission.crates=3;
+}
+
 function updateMission(dt){
-  if(!currentMission){missionTimer-=dt;if(missionTimer<=0){chooseMission();missionTimer=45;}return;}
-  currentMission.expires-=dt;
-  if(currentMission.expires<=0){currentMission=null;showToast('Delivery expired. A new job will appear.');missionTimer=15;return;}
+  // A mission with no stages cannot be finished, and a job on the HUD that can
+  // never be completed is worse than no job: it replaces the objective line
+  // with something the player cannot act on. This is what a save written
+  // before the stage pipeline restores to, so it is a case that really happens.
+  if(currentMission&&(!Array.isArray(currentMission.stages)||!currentMission.stages.length)){
+    currentMission=null;missionTimer=2;
+  }
+  if(!currentMission){missionTimer-=dt;if(missionTimer<=0)chooseMission();return;}
+  syncMissionView();
+  // The interact press is consumed by the stage rules, not by the interact
+  // handler, so a job can never be completed by a keypress that happened for
+  // some other reason. `pendingInteract` is set only by interact().
+  const result=advanceMission(currentMission,{x:player.x,z:player.z,dt,interact:pendingInteract,interactId:pendingInteractId});
+  pendingInteract=false;pendingInteractId=undefined;
+  if(result.status==='stage'){
+    beep(660,0.1);
+    showToast(`Next: ${result.stage.label}.`);
+    return;
+  }
+  if(result.status==='expired'){
+    currentMission=null;missionTimer=15;showToast('Job expired. A new one will appear.');beep(220,0.2);return;
+  }
+  if(result.status==='complete')completeMission();
 }
 
 function interact(){
   initializeAudio();
   let nearest=null, best=70;
   for(const b of world.businesses){const bl=world.buildings[b.buildingId];if(!bl)continue;const d=Math.hypot(player.x-bl.x,player.z-bl.z);if(d<best){best=d;nearest={business:b,building:bl,d};}}
-  if(currentMission){
-    if(currentMission.stage==='pickup' && nearest?.business.id===currentMission.sourceId){
-      nearest.business.stock=Math.max(0,nearest.business.stock-currentMission.crates);
-      currentMission.stage='delivery';showToast(`Picked up ${currentMission.crates} crates. Deliver them to the marked business.`);beep(520,0.12);return;
-    }
-    if(currentMission.stage==='delivery' && nearest?.business.id===currentMission.targetId){
-      nearest.business.stock+=currentMission.crates;nearest.business.open=true;nearest.business.customers+=1;nearest.business.reputation=clamp(nearest.business.reputation+0.08,0,1.5);
-      player.money+=currentMission.reward;player.energy=clamp(player.energy+9,0,100);player.missionsCompleted++;player.rank=1+Math.floor(player.missionsCompleted/3);
-      world.events.push({id:world.eventSerial++,type:'trade',x:nearest.building.x,z:nearest.building.z,t:18,life:18,severity:0.25,source:'mission'});
-      showToast(`Delivery complete +$${currentMission.reward}.`);beep(880,0.18);currentMission=null;missionTimer=18;saveGame();return;
-    }
+  // Report the press to the mission rules first. Whether it advances a job is
+  // their decision, made against the stage's own target and radius, so a press
+  // aimed at the wrong building cannot complete a job by accident.
+  if(currentMission&&nearest){
+    pendingInteract=true;
+    pendingInteractId=nearest.business.id;
   }
+  // Apply the world effect of a job stage the moment the press happens, rather
+  // than a frame later when the rules accept it. The rules own *whether* a
+  // stage completes; this owns what completing it does to the world.
+  applyMissionStageEffect(nearest);
   if(nearest){
     const cost=nearest.business.price*2.2;
     if(nearest.business.open && player.money>=cost){
@@ -925,6 +1057,50 @@ function interact(){
   for(const n of world.npcs){const d=Math.hypot(player.x-n.x,player.z-n.z);if(d<npcD){npcD=d;nearestNpc=n;}}
   if(nearestNpc){nearestNpc.memory.push({time:world.time,activity:'talked'});nearestNpc.mood=clamp(nearestNpc.mood+0.03,0,1);player.energy=clamp(player.energy+2,0,100);showToast(`${nearestNpc.name}: "${nearestNpc.activity==='work'?'Busy day out there.':'The city keeps changing.'}"`);beep(360,0.06);return;}
   showToast('Nothing useful to interact with here.');
+}
+
+/**
+ * The world effect of interacting at a business that a job stage is aimed at.
+ *
+ * Runs on the interact press rather than on the stage transition, so stock
+ * moves when the player presses the key, not one simulation frame later, and
+ * so the effect is applied at most once per press.
+ */
+function applyMissionStageEffect(nearest){
+  const stage=currentStage(currentMission);
+  if(!stage||!nearest||stage.type!=='interact')return;
+  if(stage.businessId===undefined||stage.businessId!==nearest.business.id)return;
+  if(stageDistance(stage,player.x,player.z)>stage.radius)return;
+  if(stage.effectApplied)return;
+  const b=nearest.business;
+  if(stage.id==='collect'||stage.id==='supply'){
+    // Supplies come out of a stocked business and into a dry one. A restock
+    // draws on the district rather than a specific source, which is why the
+    // world does not have to have a paired business for it.
+    //
+    // Moved in units the economy can actually feel: three crates against a
+    // forty-unit shortfall is not a delivery, it is a rounding error, and the
+    // business the player just helped looks exactly as empty as it did before.
+    const crates=22;
+    b.stock=clamp(b.stock+(stage.id==='collect'?-crates:crates),0,140);
+    if(stage.id==='supply'){b.open=true;b.reputation=clamp(b.reputation+0.08,0,1.5);b.customers+=1;}
+  }
+  stage.effectApplied=true;
+}
+
+/** Pay out, rank up, and clear the job. Called by the rules on completion. */
+function completeMission(){
+  const done=currentMission;
+  if(!done)return;
+  player.money+=done.reward;
+  player.energy=clamp(player.energy+9,0,100);
+  player.missionsCompleted++;
+  player.rank=1+Math.floor(player.missionsCompleted/3);
+  const lastStage=done.stages[done.stages.length-1];
+  if(lastStage&&Number.isFinite(lastStage.x))world.events.push({id:world.eventSerial++,type:'trade',x:lastStage.x,z:lastStage.z,t:18,life:18,severity:0.25,source:'mission'});
+  showToast(`${done.label} complete +$${done.reward}. Rank ${player.rank}.`);
+  beep(880,0.18);
+  currentMission=null;missionTimer=18;saveGame();
 }
 
 function updatePlayer(dt){
@@ -1028,6 +1204,7 @@ function updateSimulation(dt){
   syncAgentColliders();
   economyTimer-=dt;if(economyTimer<=0){updateBusinesses(1.0);economyTimer=1;}
   updateMission(dt);
+  updateObjective();
   eventMaintenance(dt);
   saveTimer-=dt;if(saveTimer<=0){saveGame();saveTimer=8;}
   if(audioNodes){audioNodes.noiseGain.gain.value=world.weather===2?0.018:world.weather===1?0.010:0.004;}

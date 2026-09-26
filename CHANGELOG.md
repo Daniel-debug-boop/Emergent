@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## 2026-09-26 — jobs you can actually take, and an economy with shortages in it
+
+There was one kind of job. It was a delivery, it was hard-coded across three
+functions (`chooseMission`, `updateMission` and three branches inside
+`interact`), and it branched on a `stage: 'pickup' | 'delivery'` string that
+every call site had to switch on. Adding a second kind of job would have meant
+editing all three.
+
+Jobs are now data. `missions.mjs` holds the archetypes as data — four of them,
+`delivery`, `restock`, `survey` and `respond` — each a list of stage templates
+and a reward curve. A mission is a list of concrete stages; the game supplies
+positions and business ids through one resolver, and the module decides when a
+stage is done, what happens next, and whether the job succeeded or ran out of
+time. Four stage types cover it: `goto`, `interact`, `hold` and `evade`. Adding
+a fifth kind of job is now a data entry.
+
+The rules live in a module with no GL, no DOM and no world generation, so they
+are tested directly rather than inferred from a delivery completing: **21 tests,
+408 assertions**, covering proximity and keypress separately, expiry ordering
+(an expired job cannot be banked by a late arrival), stage-time reset between
+legs, reward monotonicity, and the pre-pipeline save shape that would otherwise
+throw on the first tick after a load.
+
+### The economy underneath it was a floor, not a balance
+
+Two of the four archetypes were unreachable, and the reason was a real defect
+that every existing test walked straight past. Passive resupply was a flat
+trickle applied only below 18 — a hard floor. Measured across 714 businesses,
+the minimum stock sat at *exactly* 18, at every point in time, in every seed.
+Nothing was ever short, so "low stock" as a mission premise could not occur and
+the player's deliveries moved goods between businesses that were all fine.
+
+Resupply is now logistic — strongest on an empty shelf, zero on a full one —
+and every business has its own `supply` and `popularity`, so consumption and
+resupply balance at a different level in each one. Measured after 160 seconds
+of simulation: minimum **18 → 15** and still falling, p10 **26**, median **59**,
+p90 **92**, with **~70 businesses short** and **~470 with surplus**. Businesses
+close when they empty and the player's deliveries are what refill them.
+
+A delivery now moves 22 units of stock rather than 3. Against a forty-unit
+shortfall, three crates is not a delivery, it is a rounding error.
+
+### Also
+
+- The objective readout is driven from the simulation rather than the once-a-second
+  HUD refresh, so the distance counts down live instead of jumping once a second.
+- The screen-space marker and the 3D beacon follow the current *stage*, which is
+  what lets a multi-stage job change where it points without the renderer knowing
+  what a mission type is.
+
 ## 2026-09-26 — the crowd and the traffic are solid
 
 The player walked through everyone. NPCs had no colliders at all, and cars drove
