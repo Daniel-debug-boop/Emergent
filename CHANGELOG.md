@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## 2026-09-26 — frustum culling: a third of the city stops reaching the GPU
+
+The renderer uploaded the entire streaming radius — up to a 1160-unit disc of
+city, terrain, buildings, roads, trees and water — as one vertex buffer, and
+submitted all of it every frame regardless of where the camera pointed. Roughly
+two thirds of that was behind the player. There was no frustum culling at all;
+the only spatial filtering was the streaming radius, which is a residency
+decision, not a visibility one.
+
+Static geometry is now laid out as one contiguous run per 480-unit cell inside
+the same single buffer, each with its own bounds. Every frame the six frustum
+planes are extracted from the view-projection matrix and each cell is tested; a
+rejected cell costs six plane tests and nothing else, because a run is a
+`drawArrays(first, count)` sub-range rather than a separate buffer. One upload,
+many draws, no VAO churn.
+
+Measured in the headless harness at the default view: **33% of static vertices
+are now rejected before reaching the GPU** (7,272 of 22,038), and the rejected
+set changes when the camera turns.
+
+`culling.mjs` is deliberately pure — no GL, no DOM, no world state. The
+arithmetic that decides whether geometry is drawn is the arithmetic most likely
+to be subtly wrong, and a wrong plane sign does not crash, does not NaN, and
+does not fail any check that looks at whether the game runs. It deletes a third
+of the city at the screen edge instead. So the plane math is unit tested against
+ground truth: a camera is built, a 4913-point grid is projected to NDC by an
+independent path, and the predicate is required never to cull a point that is
+actually on screen. The reverse direction — conservatively keeping a box that
+straddles a frustum plane — is deliberate and documented, not a failure.
+
+**Two real bugs found while building it**, both in the new code and both caught
+by tests rather than by inspection:
+
+- `growBoundsBox` discarded the result of its first `growBounds` call. With a
+  null accumulator that call allocates, so the second call started a *different*
+  accumulator from the maximum corner — every box bound was half its real size,
+  which would have culled geometry that was on screen.
+- The first culling test asserted that a volume predicate and a point test
+  produce identical answers. They cannot, and should not: a box straddling a
+  frustum plane is correctly kept while its centre projects off screen.
+  Comparing them for equality is a test that can only pass if the culler is
+  wrong. It now asserts the one-directional safety property instead.
+
+`tools/build.mjs` gained `culling.mjs` in its manifest — caught by the existing
+`the built dist/ artifact boots and renders` check, which is exactly what that
+check is for.
+
+Still per-cell, not per-object: a cell is drawn if any part of it is on screen.
+That is the right trade at this cell size and it is a floor, not a maximum.
+
 ## 2026-09-26 — the native frame loop, and a renderer that reports honestly
 
 The native engine had a self-test and no frame loop. There was no code

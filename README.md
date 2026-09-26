@@ -49,6 +49,41 @@ Day/night, weather, business demand, traffic speed, NPC behavior and generated m
 
 ## 3D renderer
 
+### Frustum culling
+
+The static world is uploaded as **one** GPU buffer, but laid out as one
+contiguous run per 480-unit cell, each with its own bounds. Every frame the six
+frustum planes are extracted from the view-projection matrix and each cell is
+tested; a rejected cell costs a plane test and nothing else — no rebind, no
+re-upload, no per-object draw call.
+
+Before this, the entire streaming radius — up to a 1160-unit disc of city — went
+to the GPU every frame no matter where the camera pointed. Measured in the
+headless harness at the default view:
+
+| | |
+|---|---|
+| Cells built | 34 |
+| Cells submitted | 18 |
+| **Static vertices culled before the GPU** | **33%** (7,272 of 22,038) |
+| Rejected set changes with camera | asserted, not assumed |
+
+The plane arithmetic lives in `culling.mjs` as pure functions and is unit
+tested against ground truth rather than inspected in a screenshot, because a
+wrong plane sign does not crash — it silently deletes a third of the city at the
+screen edge, or nothing at all, forever. The safety property asserted
+exhaustively is one-directional: **an on-screen point is never culled.** A box
+straddling a plane is deliberately kept, because part of it is on screen.
+
+`culling.mjs` is pure — no GL, no DOM, no world state — so it is tested
+directly (71 assertions) and runs in Node with no browser.
+
+### Shading and shadows
+
+Lighting is a single directional term with distance fog, and the sun drives
+ambient, fog colour and clear colour from a full day/night cycle. Shadows are
+projected quads on the terrain, not a shadow map — see *Current limitations*.
+
 The renderer uses WebGL2 directly. It has real perspective projection, depth testing, vertex buffers, 3D terrain/buildings/trees/NPCs/vehicles, directional lighting, atmospheric fog, animated water geometry, and a geometric sun-shadow pass.
 
 The adaptive renderer is deliberately described as **selective 3D recomputation**, not pixel temporal reprojection. It uses distance, player motion, weather and district importance to decide how much geometry/detail to update. Dynamic representations also reuse prior per-NPC positions for longer intervals when an entity is visually unimportant or far away.
@@ -115,6 +150,20 @@ save/load including rejection of a save from a different world.
 ## Current limitations
 
 The game remains intentionally stylized and low-poly. The strongest remaining technical gaps are full navmesh/pathfinding, more sophisticated intersection traffic logic, true GPU-time instrumentation, advanced PBR materials/reflections, interior traversal, and pixel-level temporal reprojection. Those are not represented as completed features.
+
+Two specific known gaps in what is built:
+
+- **Frustum culling is per-cell, not per-object.** A 480-unit cell is drawn if
+  *any* part of it is on screen, so a cell straddling the view edge submits all
+  of its geometry. That is the standard trade and it is the right one at this
+  cell size — roughly 33% of static geometry is rejected at the default view —
+  but it is a floor, not a maximum. Per-object culling would need a per-object
+  draw or an indirect/multi-draw path.
+- **Shadows are projected quads, not a shadow map.** They are real geometry
+  depth-tested against the terrain, so they are correct as a shadow *shape*,
+  but they do not fall on other buildings and cannot self-shadow. A real
+  shadow map is blocked on the headless harness, which models no textures or
+  framebuffers at all — see `tools/headless_runtime.mjs`.
 
 On-device FPS, GPU time and VRAM are still unmeasured: the runtime is verified headlessly, but a real GPU measurement path must be validated on the target device before any of those numbers are quoted.
 

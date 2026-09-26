@@ -19,7 +19,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'dist');
 
 /** Runtime files copied verbatim into the build. */
-const FILES = ['index.html', 'game3d.js', 'world.mjs', 'math3d.mjs'];
+// Every module the shipped page imports. Kept explicit rather than globbed: a
+// glob would silently ship test files and scratch scripts, and a missing entry
+// is a runtime 404 in the browser that no build step would report.
+const FILES = ['index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs'];
 
 /** Build-fatal requirement: the HTML must actually load the entry module. */
 const ENTRY = /<script[^>]+src=["']game3d\.js["']/;
