@@ -317,45 +317,85 @@ await test('renderer mode toggles between standard and adaptive', async () => {
   assertGLHealthy(gl, 'renderer toggle');
 });
 
-await test('a delivery mission is offered, picked up and delivered', async () => {
+await test('a job can be offered, walked through and completed', async () => {
+  // Deliberately written against the *pipeline* rather than one archetype: the
+  // point of the stage machine is that finishing a job is the same operation
+  // whatever the job is, so a test that special-cased a delivery would pass
+  // even if every other archetype were broken.
   const { gl } = await boot({ frames: 20 });
   const game = globalThis.EMERGENT;
 
-  // A mission is generated from world state after a short delay.
   for (let i = 0; i < 12 && !game.mission; i++) await pumpFrames(30);
   const mission = game.mission;
-  assert(mission, 'the world should offer a delivery mission');
-  assertEqual(mission.stage, 'pickup', 'a fresh mission starts at the pickup stage');
-  assert(mission.reward > 0, 'a mission should pay something');
+  assert(mission, 'the world should offer a job');
+  assert(mission.stages && mission.stages.length, 'a job is made of stages');
+  assertEqual(mission.stageIndex, 0, 'a fresh job starts at the first stage');
+  assert(mission.reward > 0, 'a job should pay something');
+  assert(mission.label && mission.label.length, 'a job is labelled');
+  for (const s of mission.stages) {
+    assert(typeof s.label === 'string' && s.label.length, `stage ${s.id} is labelled`);
+    assert(Number.isFinite(s.x) && Number.isFinite(s.z), `stage ${s.id} has a real position`);
+  }
 
-  // Walk to the pickup building and interact.
-  const pickup = game.missionBuildingFor(mission);
-  assert(pickup, 'mission should reference a real building');
-  const sourceStockBefore = world_business(game, mission.sourceId).stock;
-  game.teleport(pickup.x, pickup.z + 4);
-  await pumpFrames(4);
   const moneyBefore = game.player.money;
-  fireGlobal('keydown', { key: 'e' });
+  const stockBefore = new Map(game.world.businesses.map(b => [b.id, b.stock]));
+  const stages = mission.stages.length;
+  for (let i = 0; i < stages; i++) {
+    const stage = game.mission.stages[i];
+    game.teleport(stage.x, stage.z);
+    await pumpFrames(3);
+    if (stage.type === 'interact') {
+      fireGlobal('keydown', { key: 'e' });
+      await pumpFrames(3);
+      fireGlobal('keyup', { key: 'e' });
+      await pumpFrames(2);
+    } else if (stage.duration) {
+      // A hold or evade stage needs its duration to elapse on the clock.
+      for (let t = 0; t < stage.duration * 60 + 30; t++) await pumpFrames(1);
+    } else {
+      await pumpFrames(2);
+    }
+    // The job must survive every stage except the last, which is the one
+    // allowed to finish it.
+    if (i < stages - 1) assert(game.mission, `stage ${stage.id} ended the job before its last stage`);
+  }
   await pumpFrames(4);
-  assertEqual(game.mission.stage, 'delivery', 'interacting at the source starts delivery');
-  assertEqual(game.player.money, moneyBefore, 'pickup should not pay out yet');
-  assert(world_business(game, mission.sourceId).stock < sourceStockBefore,
-    'pickup should remove crates from the source business');
+  assertEqual(game.mission, null, 'completing a job clears it');
+  assertEqual(game.player.missionsCompleted, 1, 'and counts as a completed job');
+  assert(game.player.money > moneyBefore, 'and pays the reward');
+  assert(game.player.rank >= 1, 'and leaves the player ranked');
 
-  // Deliver to the target.
-  const target = game.missionBuildingFor(game.mission);
-  assert(target, 'delivery mission should reference a target building');
-  const targetStockBefore = world_business(game, mission.targetId).stock;
-  game.teleport(target.x, target.z + 4);
-  await pumpFrames(4);
-  fireGlobal('keydown', { key: 'e' });
-  await pumpFrames(4);
-  assertEqual(game.mission, null, 'completing a delivery clears the mission');
-  assertEqual(game.player.missionsCompleted, 1, 'delivery should count as a completed mission');
-  assert(game.player.money > moneyBefore, 'delivery should pay the reward');
-  assert(world_business(game, mission.targetId).stock > targetStockBefore,
-    'delivery should restock the target business');
+  // A job that names businesses must have moved stock, or the economy is
+  // decorative and the job is a walk with a payout attached.
+  const moved = game.world.businesses.filter(b => b.stock !== stockBefore.get(b.id));
+  if (mission.stages.some(s => s.businessId !== undefined)) {
+    assert(moved.length > 0, 'a job with business targets changed the economy');
+  }
   assertGLHealthy(gl, 'mission flow');
+});
+
+await test('the economy has shortages to deliver to', async () => {
+  // A real defect that every other test passed straight through: passive
+  // restock was a flat trickle applied only below 18, which is a hard floor.
+  // The minimum stock across 714 businesses sat at exactly 18 forever, so no
+  // business was ever short, and the delivery and restock jobs — the two that
+  // move goods — could not be offered at all.
+  const { gl } = await boot({ frames: 20 });
+  const game = globalThis.EMERGENT;
+  const snapshot = () => game.world.businesses.map(b => b.stock);
+  const start = snapshot();
+  for (let i = 0; i < 8; i++) await pumpFrames(600);
+
+  const end = snapshot();
+  const lowest = Math.min(...end);
+  const median = [...end].sort((a, b) => a - b)[Math.floor(end.length / 2)];
+  assert(lowest < 18, `the city can run down (lowest stock ${lowest.toFixed(1)}, was ${Math.min(...start).toFixed(1)})`);
+  assert(median > lowest * 1.5, `and the distribution is a distribution, not a floor (median ${median.toFixed(1)}, lowest ${lowest.toFixed(1)})`);
+  const short = end.filter(v => v < 26).length;
+  const stocked = game.world.businesses.filter(b => b.open && b.stock > 45).length;
+  assert(short > 0, `there are businesses short of stock (${short})`);
+  assert(stocked > 0, `and businesses with surplus to send it (${stocked})`);
+  assertGLHealthy(gl, 'economy');
 });
 
 await test('save and load round-trips simulation state', async () => {

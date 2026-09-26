@@ -202,7 +202,13 @@ export function generateWorld(seed) {
   for (const b of w.buildings) {
     if (b.kind === 'shop' || (b.kind === 'warehouse' && rand() < 0.45) || rand() < 0.05) {
       const type = b.kind === 'warehouse' ? 'supply' : rand() < 0.35 ? 'market' : rand() < 0.6 ? 'cafe' : 'service';
-      w.businesses.push({ id: businessId++, buildingId: b.id, type, stock: 18 + rand() * 82, price: 0.85 + rand() * 0.5, open: true, customers: 0, revenue: 0, reputation: 0.5 + rand() * 0.5 });
+      w.businesses.push({ id: businessId++, buildingId: b.id, type, stock: 18 + rand() * 82, price: 0.85 + rand() * 0.5, open: true, customers: 0, revenue: 0, reputation: 0.5 + rand() * 0.5,
+        // Two per-business factors that decide where a business settles.
+        // `supply` is how well its district is served; `popularity` is how many
+        // people want what it sells. Without them every business drifts to the
+        // same stock level, and a city where every shop has the same amount of
+        // everything has no shortages to deliver to.
+        supply: 0.7 + rand() * 1.1, popularity: 0.6 + rand() * 1.2 });
     }
   }
 

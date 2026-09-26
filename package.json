@@ -4,10 +4,11 @@
   "type": "module",
   "description": "EMERGENT — procedural 3D open-world game",
   "scripts": {
-    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:physics && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:missions && npm run test:physics && npm run test:project && npm run test:tooling && npm run test:runtime",
     "test:world": "node test_world.mjs",
     "test:math": "node test_math3d.mjs",
     "test:culling": "node test_culling.mjs",
+    "test:missions": "node test_missions.mjs",
     "test:physics": "node test_physics.mjs",
     "test:project": "node test_project.mjs",
     "test:tooling": "node test_tooling.mjs",

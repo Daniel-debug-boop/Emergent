@@ -27,7 +27,7 @@ const OUT = path.join(ROOT, 'dist');
 // Every module the shipped page imports. Kept explicit rather than globbed: a
 // glob would silently ship test files and scratch scripts, and a missing entry
 // is a runtime 404 in the browser that no build step would report.
-const FILES = ['index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs', 'physics.mjs'];
+const FILES = ['index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs', 'physics.mjs', 'missions.mjs'];
 
 /**
  * Third-party modules, as [source relative to ROOT, destination in dist].
