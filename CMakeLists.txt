@@ -133,6 +133,145 @@ endif()
 
 add_test(NAME emergent_physics COMMAND emergent_physics_test)
 
+# ---------------------------------------------------------------------------
+# Asset packs — Zstandard, built and tested for real
+# ---------------------------------------------------------------------------
+# EMERGENT ships content as compressed packs. Zstandard is used for the
+# container, and it is also what proves the container is undamaged: every
+# payload and the index are complete zstd frames, so a corrupted or truncated
+# pack fails to decompress instead of loading garbage.
+#
+# Only the library is built. zstd's CLI programs, tests and dictionary
+# builder are separate executables EMERGENT never invokes, and each one costs
+# another link on a single-core build host.
+if(NOT TARGET libzstd_static)
+  if(EMERGENT_ZSTD_DIR AND EXISTS "${EMERGENT_ZSTD_DIR}/build/cmake/CMakeLists.txt")
+    message(STATUS "EMERGENT: using pinned Zstandard tree at ${EMERGENT_ZSTD_DIR}")
+    set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ZSTD_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+    set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
+    # The static target is the only one that works without an install step, and
+    # it is what the pack format and the engine both link.
+    set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    add_subdirectory("${EMERGENT_ZSTD_DIR}/build/cmake" "${CMAKE_BINARY_DIR}/zstd")
+  endif()
+endif()
+
+if(TARGET libzstd_static)
+  add_library(emergent_assets STATIC native/src/asset_pack.cpp)
+  target_include_directories(emergent_assets PUBLIC native/include)
+  target_link_libraries(emergent_assets PUBLIC libzstd_static)
+
+  add_executable(emergent_asset_pack_test native/tests/asset_pack_test.cpp)
+  target_link_libraries(emergent_asset_pack_test PRIVATE emergent_assets)
+  if(UNIX)
+    target_compile_options(emergent_assets PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+    target_compile_options(emergent_asset_pack_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+
+  add_test(NAME emergent_asset_pack COMMAND emergent_asset_pack_test)
+else()
+  message(STATUS "EMERGENT: no Zstandard tree supplied; compressed asset packs are not built.")
+endif()
+
+# ---------------------------------------------------------------------------
+# Profiling — always-on zone accounting, optional Tracy capture
+# ---------------------------------------------------------------------------
+# Zone accounting is unconditional: it is cheap, it allocates nothing after
+# start-up, and it writes a JSON profile a CI job can assert on.
+#
+# Tracy is off by default. Its client streams to a running Tracy server, which
+# does not exist in a build container, so switching it on here would produce a
+# dependency that cannot be verified. Turn it on where a developer is actually
+# looking at a capture.
+option(EMERGENT_ENABLE_TRACY "Compile in Tracy live capture (needs a running Tracy server)" OFF)
+
+if(NOT TARGET TracyClient)
+  if(EMERGENT_TRACY_DIR AND EXISTS "${EMERGENT_TRACY_DIR}/CMakeLists.txt")
+    message(STATUS "EMERGENT: using pinned Tracy tree at ${EMERGENT_TRACY_DIR}")
+    # TRACY_ENABLE must be ON. With it off, TracyClient.cpp compiles to an empty
+    # stub that defines none of the profiler API, so anything that calls into
+    # Tracy still compiles and then fails to link on tracy::GetProfiler().
+    # That is exactly the failure the CI Tracy build exists to catch.
+    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+    set(TRACY_ON_DEMAND OFF CACHE BOOL "" FORCE)
+    set(TRACY_CALLSTACK OFF CACHE BOOL "" FORCE)
+    set(TRACY_NO_FRAME_IMAGE OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${EMERGENT_TRACY_DIR}" "${CMAKE_BINARY_DIR}/tracy")
+  endif()
+endif()
+
+add_library(emergent_profiling STATIC native/src/profiling.cpp)
+target_include_directories(emergent_profiling PUBLIC native/include)
+if(EMERGENT_ENABLE_TRACY AND TARGET Tracy::TracyClient)
+  message(STATUS "EMERGENT: Tracy live capture enabled")
+  target_link_libraries(emergent_profiling PUBLIC Tracy::TracyClient)
+  target_compile_definitions(emergent_profiling PUBLIC EMERGENT_WITH_TRACY=1)
+elseif(EMERGENT_ENABLE_TRACY)
+  message(WARNING "EMERGENT_ENABLE_TRACY=ON but no Tracy tree was supplied; zone accounting only.")
+endif()
+if(UNIX)
+  target_compile_options(emergent_profiling PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+# ---------------------------------------------------------------------------
+# Animation — ozz-animation, built and tested for real
+# ---------------------------------------------------------------------------
+# EMERGENT authors its rig and its clips in code (see native/src/animation.cpp),
+# so it needs the ozz *offline* builders — SkeletonBuilder and AnimationBuilder —
+# on top of the runtime jobs. That is the difference between ozz being wired in
+# and ozz being dead weight: without a caller the linker drops both archives.
+#
+# ozz's samples, how-tos, tests and asset tools are separate applications that
+# pull in OpenGL/GLFW/SDL2 and their own pipelines, and cannot be built headless.
+# The real switches are `ozz_build_*`; the old BUILD_* names silently did
+# nothing and ozz's samples were built anyway, which is what broke configure.
+set(ozz_build_samples OFF CACHE BOOL "" FORCE)
+set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
+set(ozz_build_tests OFF CACHE BOOL "" FORCE)
+set(ozz_build_tools OFF CACHE BOOL "" FORCE)
+set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
+set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
+set(ozz_build_data OFF CACHE BOOL "" FORCE)
+
+if(NOT TARGET ozz_animation)
+  if(EMERGENT_OZZ_DIR AND EXISTS "${EMERGENT_OZZ_DIR}/CMakeLists.txt")
+    message(STATUS "EMERGENT: using pinned ozz-animation tree at ${EMERGENT_OZZ_DIR}")
+    add_subdirectory("${EMERGENT_OZZ_DIR}" "${CMAKE_BINARY_DIR}/ozz-animation")
+  endif()
+endif()
+
+if(TARGET ozz_animation AND TARGET ozz_animation_offline)
+  add_library(emergent_animation STATIC native/src/animation.cpp)
+  target_include_directories(emergent_animation PUBLIC native/include)
+  target_link_libraries(emergent_animation PUBLIC ozz_base ozz_animation ozz_animation_offline)
+
+  add_executable(emergent_animation_test native/tests/animation_test.cpp)
+  target_link_libraries(emergent_animation_test PRIVATE emergent_animation)
+  if(UNIX)
+    target_compile_options(emergent_animation PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+    target_compile_options(emergent_animation_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+
+  add_test(NAME emergent_animation COMMAND emergent_animation_test)
+else()
+  message(STATUS "EMERGENT: no ozz-animation tree supplied; the animation subsystem is not built.")
+endif()
+
+# The profiling test drives the physics and animation subsystems for real, so
+# that "the engine reports through the profiler" is checked rather than assumed.
+# It is registered here because those two targets are only defined above.
+if(TARGET emergent_animation)
+  add_executable(emergent_profiling_test native/tests/profiling_test.cpp)
+  target_link_libraries(emergent_profiling_test PRIVATE emergent_profiling emergent_physics emergent_animation)
+  if(UNIX)
+    target_compile_options(emergent_profiling_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME emergent_profiling COMMAND emergent_profiling_test)
+endif()
+
 # Developer-supplied trees are equally first-class and keep CI/offline builds reproducible.
 # Jolt's CMake entry point is the repository's Build/ directory, not its root.
 # Accept either so a user can point at a clone or at the Build dir itself.
@@ -187,15 +326,11 @@ endif()
 if(EMERGENT_MINIAUDIO_DIR AND EXISTS "${EMERGENT_MINIAUDIO_DIR}/CMakeLists.txt")
   add_subdirectory("${EMERGENT_MINIAUDIO_DIR}" "${CMAKE_BINARY_DIR}/miniaudio")
 endif()
-if(EMERGENT_OZZ_DIR AND EXISTS "${EMERGENT_OZZ_DIR}/CMakeLists.txt")
-  # EMERGENT consumes the ozz runtime libraries only. Its samples, tools, games
-  # and tests are separate applications that pull in OpenGL/GLFW/SDL2 and their
-  # own asset pipelines; building them is neither needed nor possible headless.
-  set(ozz_build_samples OFF CACHE BOOL "" FORCE)
-  set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
-  set(ozz_build_tests OFF CACHE BOOL "" FORCE)
-  set(ozz_build_tools OFF CACHE BOOL "" FORCE)
-  set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
+if(NOT TARGET ozz_animation AND EMERGENT_OZZ_DIR AND EXISTS "${EMERGENT_OZZ_DIR}/CMakeLists.txt")
+  # Already added, with its build switches resolved, by the animation section
+  # above. This guard only exists so a tree that arrives after that section has
+  # already run is still picked up; re-adding it would reuse one binary
+  # directory, which CMake rejects.
   add_subdirectory("${EMERGENT_OZZ_DIR}" "${CMAKE_BINARY_DIR}/ozz-animation")
 endif()
 
@@ -237,6 +372,8 @@ require_target("Flecs" flecs::flecs_static)
 require_target("miniaudio" miniaudio)
 require_target("Ozz animation base" ozz_base)
 require_target("Ozz animation runtime" ozz_animation)
+require_target("Ozz animation offline builders" ozz_animation_offline)
+require_target("Zstandard static library" libzstd_static)
 
 add_executable(emergent_native
   native/src/main.cpp
@@ -248,7 +385,7 @@ add_executable(emergent_native
   native/src/audio.cpp
   native/src/vma_impl.cpp)
 target_include_directories(emergent_native PRIVATE native/include)
-target_link_libraries(emergent_native PRIVATE emergent_physics meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation)
+target_link_libraries(emergent_native PRIVATE emergent_physics emergent_animation emergent_assets emergent_profiling meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation ozz_animation_offline libzstd_static)
 target_compile_definitions(emergent_native PRIVATE EMERGENT_UPSTREAM_ONLY=1)
 
 if(UNIX)

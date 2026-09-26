@@ -130,33 +130,63 @@ The native engine is upstream-only for infrastructure that has a mature open-sou
 | Subsystem | Library | Pinned at | State |
 |---|---|---|---|
 | Rigid-body physics | Jolt Physics | `v5.6.0` | Compiled, linked, **22 behaviour tests pass** — gravity, resting contact, slab geometry, lifecycle |
+| Skeletal animation | ozz-animation | `0.17.0` | **188 symbols in the linked binary.** Bakes a procedural biped rig and idle/walk/run clips, samples and blends them through ozz's runtime jobs. **84 behaviour checks pass** |
+| Asset packs | Zstandard | `v1.5.7` | **450 symbols in the linked binary.** Packs are written, read and integrity-checked on every self-test run. **83 behaviour checks pass**, including corruption, truncation and header attacks |
+| Profiling | Tracy (opt-in) + built-in zone accounting | `v0.13.0` | Zone accounting always on and verified; Tracy compiles in with `-DEMERGENT_ENABLE_TRACY=ON`. **48 behaviour checks pass** |
 | Mesh optimisation | meshoptimizer | `v1.2` | Compiled, **runs at runtime** (`BOUNDARY_READY`) |
 | Entity-component world | Flecs | `v4.0.5` | Compiled, **runs at runtime** (`ACTIVE`, entities created and updated) |
 | Audio | miniaudio | `0.11.25` | Compiled, **engine initialises at runtime** (`ACTIVE`) |
 | Navigation | Recast/Detour | `v1.6.0` | Compiled and linked; crowd + navmesh-query boundary |
 | Vulkan loader dispatch | Volk | `vulkan-sdk-1.4.328.0` | Compiled and linked |
 | GPU memory allocation | Vulkan Memory Allocator | `v3.3.0` | Compiled and linked; VMA implementation TU + volk function import |
-| Animation runtime | ozz-animation | `0.17.0` | Libraries build, but **no code path uses it** — the linker drops it (0 ozz symbols in the binary). See below. |
+
+Symbol counts are `nm -C emergent_native | grep -c`, not a claim: a static archive that nothing calls is dropped by the linker, which is exactly how ozz sat at 0 symbols in the previous revision.
 
 ```
 $ ./build/native/emergent_native
 meshoptimizer: BOUNDARY_READY
+Jolt simulation: ACTIVE first_dynamic_y=0.48
 Flecs ECS: ACTIVE entities=2
 miniaudio: ACTIVE
-Jolt simulation: ACTIVE first_dynamic_y=0.48
-Native scene self-test: objects=50000 visible=35514 culled=14486 CPU_ms=0.136892
+ozz animation: ACTIVE joints=10 clips=3 head_y=0.518
+Zstandard packs: ACTIVE entries=2 ratio=0.1068 manifest=round-tripped
+Native scene self-test: objects=50000 visible=35514 culled=14486 CPU_ms=0.133482
+Profiling: 6 zones, total 1.47402 ms -> emergent_profile.json
+Tracy: not compiled in (-DEMERGENT_ENABLE_TRACY=ON)
 
 $ ctest --test-dir build/native
-100% tests passed, 0 tests failed out of 3
+100% tests passed, 0 tests failed out of 6
 ```
 
-`first_dynamic_y=0.48` is a real measurement: the seeded body starts at `y=4.0`, falls under gravity, and comes to rest on the ground plane at `y≈0.5`.
+`first_dynamic_y=0.48` is a real measurement: the seeded body starts at `y=4.0`, falls under gravity, and comes to rest on the ground plane at `y≈0.5`. `head_y=0.518` is a model-space joint position resolved through ozz's `LocalToModelJob` one second into a walk cycle; the rest-pose height is `0.52`. `ratio=0.1068` is the real stored-to-original byte ratio of a pack written during that run.
+
+### Skeletal animation
+
+`native/src/animation.cpp` owns the authoring half of ozz: a ten-joint biped rig and three locomotion clips, generated from joint motion curves in code and baked once through `ozz::animation::offline::SkeletonBuilder` and `AnimationBuilder`. Playback uses `SamplingJob`, `BlendingJob` and `LocalToModelJob`.
+
+That means there is no skeleton asset to ship, no offline tool to run, and no binary blob that can go stale — and the rig is still a real rig, evaluated by the real runtime. The depth-first joint ordering ozz requires is asserted at bake time, because a wrong order silently animates the wrong bones.
+
+`AnimationLibrary`, `Animator` and `Pose` expose only names, floats and matrices; no ozz type crosses the header boundary.
+
+### Content packs
+
+`native/src/asset_pack.cpp` defines `.ezpk`: a 48-byte header, one zstd frame per entry, and a trailing zstd frame holding the index. Entries are independently compressed, so one bad entry does not damage the rest.
+
+Integrity comes from zstd, not from a checksum EMERGENT invented. One catch worth recording: **`ZSTD_c_checksumFlag` is off by default**, so the obvious `ZSTD_compress()` produces frames that decode happily after corruption. The writer explicitly requests the checksum and the reader refuses any frame that does not carry one, which is what makes the corruption tests real rather than decorative.
+
+Every offset in the header is range-checked by subtraction rather than addition, so a hostile index cannot overflow the check and steer a read outside the buffer.
+
+### Profiling
+
+`emergent::profile::Scope` times a named region and accumulates calls, total, minimum and maximum. It allocates nothing after start-up: a fixed 64-entry table, and a run that overflows it reports `droppedScopes` rather than quietly measuring a subset.
+
+The engine instruments its real subsystems and writes `emergent_profile.json` on every self-test run, which CI publishes as an artifact. Tracy live capture is wired behind `-DEMERGENT_ENABLE_TRACY=ON` and shares the zone names. It is **off by default and no capture is claimed**: Tracy's client streams to a running Tracy server, and a build container has none. CI builds *and runs* the Tracy-enabled variant so the option cannot rot — which it already had, in the form of a `TRACY_ENABLE` inversion that made the library build and every consumer fail to link.
 
 ### What is not integrated, and why
 
 - **The Forge** — not integrated. It is a full rendering framework with its own RHI, windowing and build system. EMERGENT's renderer is raw Vulkan + Volk + VMA, and swapping in The Forge would be a replacement of the renderer, not an addition to it.
-- **ozz** — its libraries build, but nothing calls them. `nm` on the linked binary reports **0 ozz symbols**: the link drops unused static archives, so ozz costs build time and contributes no code. ozz animates *authored* skeleton and clip data produced by its offline tooling, and this repository has no skeleton, no animation clips and no importer, so there is nothing to sample. It is wired into the build and ready, but it is not an integrated feature and its cost is currently pure. Removing it from `target_link_libraries` would cut build time until an asset pipeline exists.
-- **KTX, Slang, Tracy, Zstandard** — not integrated. There is no compressed-texture path, no shading-language compilation, no profiler capture layer and no compressed-save format in the tree that would use them.
+- **KTX / Basis Universal** — not integrated. A compressed-texture path needs authored `.ktx2` assets to decode; the tree has no texture assets and no GPU here to validate an upload against, so a KTX integration would be a decoder with nothing to decode. Not claimed.
+- **Slang** — not integrated. It is a shading-language compiler, and the two compute shaders in `native/shaders/` are GLSL compiled by the driver at load time. There is no offline shader-compilation step to replace, and no GPU to validate generated SPIR-V against. Not claimed.
 
 ### Vulkan runtime status
 

@@ -1,11 +1,11 @@
 name: Native
 
 # The native tree is C++ against pinned upstream libraries (Jolt, Recast/Detour,
-# Volk, VMA, meshoptimizer, Flecs, miniaudio, ozz). For a long stretch it was
-# never compiled at all: the sources were syntactically plausible but had real
-# API errors that only appeared once a compiler was pointed at them, and a
-# CMake tag (`1.4.328`) that does not exist upstream. This job keeps that from
-# silently rotting again.
+# Volk, VMA, meshoptimizer, Flecs, miniaudio, ozz-animation, Zstandard, Tracy).
+# For a long stretch it was never compiled at all: the sources were
+# syntactically plausible but had real API errors that only appeared once a
+# compiler was pointed at them, and a CMake tag (`1.4.328`) that does not exist
+# upstream. This job keeps that from silently rotting again.
 
 on:
   push:
@@ -57,6 +57,10 @@ jobs:
           fetch flecs                  v4.0.5            https://github.com/SanderMertens/flecs.git
           fetch miniaudio              0.11.25           https://github.com/mackron/miniaudio.git
           fetch ozz-animation          0.17.0            https://github.com/guillaumeblanc/ozz-animation.git
+          fetch zstd                   v1.5.7            https://github.com/facebook/zstd.git
+          # Tracy is fetched so the option is exercised, but capture stays off:
+          # its client streams to a Tracy server, and a CI runner has none.
+          fetch tracy                  v0.13.0           https://github.com/wolfpld/tracy.git
 
       - name: Configure
         run: |
@@ -69,10 +73,19 @@ jobs:
             -DEMERGENT_VMA_DIR="$PWD/third_party/VulkanMemoryAllocator" \
             -DEMERGENT_FLECS_DIR="$PWD/third_party/flecs" \
             -DEMERGENT_MINIAUDIO_DIR="$PWD/third_party/miniaudio" \
-            -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation"
+            -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation" \
+            -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
+            -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
 
       - name: Build
-        run: cmake --build build/native --target emergent_native emergent_benchmark emergent_physics_test
+        run: |
+          cmake --build build/native --target \
+            emergent_native \
+            emergent_benchmark \
+            emergent_physics_test \
+            emergent_animation_test \
+            emergent_asset_pack_test \
+            emergent_profiling_test
 
       # No GPU is present on the runner, so the Vulkan backend reports
       # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
@@ -80,3 +93,43 @@ jobs:
       # link, which is what proves the VMA/volk/Flecs/Jolt integration.
       - name: Test
         run: ctest --test-dir build/native --output-on-failure
+
+      # The self-test writes a real profile; publishing it makes an
+      # unmeasured subsystem visible instead of leaving it implied.
+      - name: Upload the profile the self-test produced
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emergent-profile
+          path: build/native/emergent_profile.json
+          if-no-files-found: warn
+
+      # Tracy's client is linked and its tests run when EMERGENT_ENABLE_TRACY=ON.
+      # Testing it here is what stops the option from rotting into a flag that
+      # no longer compiles — which it already had twice: TRACY_ENABLE was forced
+      # off, so the profiling library built and every consumer then failed to
+      # link on tracy::GetProfiler(); and this step initially built only one of
+      # the four test executables, so ctest reported the other three as "Not Run".
+      # No capture is taken, because there is no server to take one from, and the
+      # profiling test reports exactly that.
+      - name: Build and test the Tracy-enabled configuration
+        run: |
+          cmake -S . -B build/tracy -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEMERGENT_BUILD_ENGINE=OFF \
+            -DEMERGENT_ENABLE_TRACY=ON \
+            -DEMERGENT_JOLT_DIR="$PWD/third_party/JoltPhysics" \
+            -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation" \
+            -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
+            -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
+          # Every test executable, not just the profiling one. emergent_profiling_test
+          # links emergent_animation, so the ozz libraries get built as a side effect
+          # of building it - but the other three test binaries are not dependencies
+          # of anything built here, and ctest reports a missing executable as
+          # "Not Run" rather than as a build failure.
+          cmake --build build/tracy --target \
+            emergent_physics_test \
+            emergent_asset_pack_test \
+            emergent_animation_test \
+            emergent_profiling_test
+          ctest --test-dir build/tracy --output-on-failure
