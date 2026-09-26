@@ -1,5 +1,85 @@
 # CHANGELOG
 
+## 2026-09-26 — the last three unwired dependencies are now real
+
+The previous pass left a list of things the README implied and the tree did not
+have. Three of them are now genuinely integrated, and the two that are not are
+documented as deliberate exclusions rather than silent gaps.
+
+**ozz-animation: 0 symbols → 188.** It was wired into the build and nothing
+called it, so the linker dropped both archives and it cost build time for no
+code. `native/src/animation.cpp` now owns the authoring half ozz does not
+ship: a ten-joint biped rig and idle/walk/run clips, described by joint motion
+curves in code and baked once through `SkeletonBuilder` and `AnimationBuilder`.
+Playback runs the real runtime jobs — `SamplingJob`, `BlendingJob`,
+`LocalToModelJob` — behind `AnimationLibrary`/`Animator`/`Pose`, none of which
+leaks an ozz type into a header. `NativeEngine` bakes the rig during
+`initialize()` and plays a walk cycle in the self-test, which is what puts the
+symbols in the binary.
+
+Two real bugs were found and fixed while building it:
+- **The rig's joint table was in the wrong order.** ozz stores joints in
+  depth-first order and `LocalToModelJob` resolves each from its parent's
+  earlier index; a table that looks right but is not depth-first animates the
+  wrong bones with no error. The bake now asserts the baked order against the
+  table and refuses to produce a rig that disagrees. This assertion is what
+  caught the bug.
+- **`SamplingJob::Context` takes a track count, not a SoA slot count.** Passing
+  `num_soa_tracks()` (3) instead of `num_tracks()` (10) produces a context of
+  one SoA slot, and every `SamplingJob::Run()` then fails validation.
+
+**Zstandard: nothing → 450 symbols, and a pack format.** `native/src/asset_pack.cpp`
+defines `.ezpk`: a 48-byte header, one zstd frame per entry, and a trailing
+frame holding the index. The writer and reader are both in the engine, and the
+self-test writes a pack and reads it back on every run.
+
+One finding is worth more than the feature. `ZSTD_c_checksumFlag` is **off by
+default**, so `ZSTD_compress()` produces frames that decode cleanly after
+corruption — the obvious implementation looks like it has integrity checking and
+does not. The writer now sets the flag explicitly and the reader *refuses* any
+frame that does not carry a checksum, after inspecting the frame header via
+`ZSTD_getFrameHeader` before allocating anything. The corruption test corrupts a
+byte inside a payload and requires the read to fail; it passed against the
+first implementation by accident and fails against this one on purpose.
+
+Header offsets are range-checked by subtraction rather than addition, so a
+hostile index cannot overflow the check and steer a read outside the buffer.
+
+**Profiling: none → always-on zone accounting, plus optional Tracy.** A named
+`profile::Scope` accumulates calls, total, minimum and maximum wall time into a
+fixed 64-entry table that allocates nothing after start-up, and a run that
+overflows it reports `droppedScopes` rather than quietly measuring a subset.
+`emergent_native` instruments physics, ECS, mesh optimisation, animation and the
+scene cull, and writes `emergent_profile.json`; CI publishes it as an artifact.
+Tracy (`v0.13.0`) is wired behind `-DEMERGENT_ENABLE_TRACY=ON` with the same zone
+names, and CI *builds and runs* that variant so the option cannot rot. It stays
+off by default and no capture is claimed anywhere: Tracy's client streams to a
+running Tracy server, and a build container has none. There is deliberately no
+"connected" predicate in the API, because Tracy exposes no connection state and
+inventing one would be the exact failure this module exists to prevent.
+
+Running that Tracy-enabled variant is what caught a real defect in it. The
+CMake block had `set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)`, reasoning that
+"don't build the profiler" meant "don't turn profiling on". It means the
+opposite: with `TRACY_ENABLE` off, `TracyClient.cpp` compiles to a stub that
+defines none of the profiler API, so `emergent_profiling` built cleanly and then
+*any* consumer failed to link on `tracy::GetProfiler()`. The block also set
+`TRACY_UPLOAD`, an option that does not exist in Tracy v0.13.0. Both are fixed;
+the Tracy-enabled executable now links 477 `tracy::` symbols and its 4/4 tests
+pass, and the profiling test correctly reports `compiled in; a capture needs a
+running Tracy server` rather than claiming a capture.
+
+**Verification.** `ctest` is now 6/6, up from 3/3. The three new suites add 215
+behaviour checks: 84 animation, 83 asset pack, 48 profiling. The profiling test
+drives the real physics and animation subsystems rather than a synthetic loop, so
+"the engine reports through the profiler" is checked rather than assumed.
+
+Still not integrated, and now stated as exclusions: **KTX/Basis** (no texture
+assets to decode and no GPU to validate an upload against), **Slang** (the
+compute shaders are GLSL compiled by the driver; there is no offline
+shader-compilation step to replace), **The Forge** (it would replace the
+renderer rather than extend it).
+
 ## 2026-09-25 — native engine built and verified for the first time
 
 The native C++ tree had never been compiled. Every previous verification claim

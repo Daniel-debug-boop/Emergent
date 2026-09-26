@@ -33,8 +33,11 @@ npm run check     # syntax check
 cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DEMERGENT_JOLT_DIR=... -DEMERGENT_MESHOPTIMIZER_DIR=... -DEMERGENT_RECAST_DIR=... \
   -DEMERGENT_VOLK_DIR=... -DEMERGENT_VMA_DIR=... -DEMERGENT_FLECS_DIR=... \
-  -DEMERGENT_MINIAUDIO_DIR=... -DEMERGENT_OZZ_DIR=...
-cmake --build build/native --target emergent_native emergent_benchmark
+  -DEMERGENT_MINIAUDIO_DIR=... -DEMERGENT_OZZ_DIR=... \
+  -DEMERGENT_ZSTD_DIR=... -DEMERGENT_TRACY_DIR=...
+cmake --build build/native --target emergent_native emergent_benchmark \
+  emergent_physics_test emergent_animation_test emergent_asset_pack_test \
+  emergent_profiling_test
 ctest --test-dir build/native --output-on-failure
 ```
 
@@ -44,15 +47,27 @@ tooling, and a runtime suite that boots the **unmodified** game and executes its
 real frame loop, simulation, streaming and WebGL draw calls inside Node.
 
 The native side is no longer a source tree of unbuilt code. `emergent_native`
-compiles and links against all eight pinned upstream libraries and runs:
-meshoptimizer, Flecs and miniaudio report active at runtime, and Jolt reports
-`first_dynamic_y=0.48` for a body seeded at `y=4.0` that fell under gravity and
-came to rest. `ctest` passes 3/3, including a 22-assertion Jolt behaviour test.
-Building it exposed four defects that had been invisible precisely because
-nothing had ever compiled it — a CMake tag that does not exist upstream, Jolt
-added from the wrong directory, a meshoptimizer API change, and a Recast API
-removal — plus a VMA instantiation that was never provided at all. See
-`docs/ENGINE_VERIFICATION.md`.
+compiles and links against all ten pinned upstream libraries and runs them:
+meshoptimizer, Flecs, miniaudio and Jolt report active at runtime, ozz resolves
+a real skeletal pose (`head_y=0.518`), and a Zstandard pack round-trips at a
+measured 0.1068 stored-to-original ratio. `ctest` passes 6/6 — the original
+22-assertion Jolt behaviour test plus 215 new checks across animation (84),
+asset packs (83) and profiling (48).
+
+Building it exposed defects that had been invisible precisely because nothing
+had ever compiled it — a CMake tag that does not exist upstream, Jolt added from
+the wrong directory, a meshoptimizer API change, a Recast API removal, and a VMA
+instantiation that was never provided at all. The later passes found more of
+the same kind: a rig joint table in the wrong traversal order, an ozz sampling
+context sized in the wrong units, and — the one worth remembering — an asset
+format that *looked* integrity-checked because `ZSTD_decompress` was used,
+when `ZSTD_c_checksumFlag` is off by default and corrupt frames decode
+perfectly well. See `docs/ENGINE_VERIFICATION.md`.
+
+Every "integrated" claim for a static archive is checked with
+`nm -C emergent_native | grep -c`, because an archive nothing calls is dropped
+by the linker and still builds cleanly. ozz sat at 0 symbols in the previous
+revision; it is at 188 now.
 
 Measured CPU-side world-generation and headless benchmark timings are recorded in
 `benchmark.md`.
