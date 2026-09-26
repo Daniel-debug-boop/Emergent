@@ -1,5 +1,63 @@
 # CHANGELOG
 
+## 2026-09-26 — the native frame loop, and a renderer that reports honestly
+
+The native engine had a self-test and no frame loop. There was no code
+anywhere that sequenced physics and animation against a clock, and no renderer
+beyond a one-shot bootstrap. This adds both.
+
+**The loop** (`native/src/frame_loop.cpp`, 125 behaviour checks). Physics runs at
+a fixed 1/60s step, always; real time accumulates and drains in whole steps, so
+the simulation advances at a rate that depends on nothing but the time that has
+elapsed. Presentation runs at the display rate, with the leftover fraction
+`alpha` used to interpolate between the last two simulation states. Animation is
+advanced once per frame by the real delta and never per substep, which is what
+keeps motion smooth at 144Hz while the solver stays deterministic.
+
+The synchronization rules are the substance here, and each one is a test:
+
+- 60 frames at 1/60s and 30 frames at 1/30s take the same 60 steps and end in
+  the same place. Confirmed through the shipped binary too: 4 seconds of
+  `--walk` at 30Hz, 90Hz and 144Hz all end at `pos z=16.11`.
+- The same delta and input sequence over 500 frames is bit-identical, in both
+  position and pose.
+- A frame that takes no physics step collapses its interpolation window, so at
+  144Hz — where half of all frames take no step — nothing is ever drawn behind
+  the simulation.
+- A four-substep frame advances animation by exactly one real delta.
+- A stalled frame is clamped and its step count capped, with the backlog
+  discarded rather than carried, because carrying it is the spiral of death.
+  An infinite delta is a failed clock and is discarded instead, because
+  clamping it would simulate time that never happened.
+
+**The renderer** (`native/src/vulkan_render.cpp`). `RenderBackend` is the
+interface; `VulkanRenderBackend` implements a real render pass, depth target,
+graphics pipeline, instanced draw of the scene boxes and the ozz skeleton
+straight from the pose matrices, and acquire/submit/present. It uses a swapchain
+when a window is attached and an offscreen target when one is not.
+
+`NullRenderBackend` is not a stub. It validates every frame state and refuses to
+count a rejected frame as submitted, which is what catches a loop that produces
+a NaN on a machine with no GPU rather than on someone else's.
+
+**Not verified: none of the Vulkan render path has ever executed.** There is no
+ICD and no `/dev/dri` here, so `vkCreateInstance` fails and `open()` reports
+why. That code is compile- and link-checked against Vulkan 1.3 headers and
+nothing more. The GLSL is not compiled either — no `glslc` here — so `open()`
+reports `shader module unavailable` by name. Details in
+`docs/ENGINE_VERIFICATION.md`.
+
+**No windowing dependency was added.** `SurfaceProvider` is the one extension
+point; implementing it over GLFW, SDL or XCB is a single class, and nothing in
+the loop, the physics, the animation or the render path changes to accommodate
+one. The reasoning is in `docs/OPEN_SOURCE_DECISIONS.md`.
+
+Also: `JoltPhysicsWorld` gained stable body handles and
+`bodyPosition`/`bodyVelocity`/`setBodyVelocity`/`setBodyPosition`, because a
+frame loop cannot drive a body through `firstDynamicY()`. `emergent_native`
+gained `--frames`, `--hz`, `--realtime`, `--render` and `--walk`, and ctest now
+runs the shipped binary's loop at three rates as well as the test binary.
+
 ## 2026-09-26 — the last three unwired dependencies are now real
 
 The previous pass left a list of things the README implied and the tree did not

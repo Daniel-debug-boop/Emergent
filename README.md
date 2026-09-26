@@ -133,6 +133,8 @@ The native engine is upstream-only for infrastructure that has a mature open-sou
 | Skeletal animation | ozz-animation | `0.17.0` | **188 symbols in the linked binary.** Bakes a procedural biped rig and idle/walk/run clips, samples and blends them through ozz's runtime jobs. **84 behaviour checks pass** |
 | Asset packs | Zstandard | `v1.5.7` | **450 symbols in the linked binary.** Packs are written, read and integrity-checked on every self-test run. **83 behaviour checks pass**, including corruption, truncation and header attacks |
 | Profiling | Tracy (opt-in) + built-in zone accounting | `v0.13.0` | Zone accounting always on and verified; Tracy compiles in with `-DEMERGENT_ENABLE_TRACY=ON`. **48 behaviour checks pass** |
+| Frame loop | Jolt + ozz, behind `FrameLoop` | — | **125 behaviour checks pass.** Fixed 1/60s physics, variable-rate presentation, interpolated render state. Frame-rate independence and bit-exact determinism both asserted |
+| Renderer | Vulkan 1.3 via Volk + VMA | `vulkan-sdk-1.4.328.0` | **Compiled and linked only — never executed.** No ICD and no `/dev/dri` here. Headless backend's frame-state validation is tested; the GPU path is not |
 | Mesh optimisation | meshoptimizer | `v1.2` | Compiled, **runs at runtime** (`BOUNDARY_READY`) |
 | Entity-component world | Flecs | `v4.0.5` | Compiled, **runs at runtime** (`ACTIVE`, entities created and updated) |
 | Audio | miniaudio | `0.11.25` | Compiled, **engine initialises at runtime** (`ACTIVE`) |
@@ -148,17 +150,102 @@ meshoptimizer: BOUNDARY_READY
 Jolt simulation: ACTIVE first_dynamic_y=0.48
 Flecs ECS: ACTIVE entities=2
 miniaudio: ACTIVE
+frame loop: ACTIVE frames=120 steps=2 sim=2.00s alpha=0.000000 clip=run pos=(0.00,0.49,13.69) joints=10 boxes=25
 ozz animation: ACTIVE joints=10 clips=3 head_y=0.518
 Zstandard packs: ACTIVE entries=2 ratio=0.1068 manifest=round-tripped
-Native scene self-test: objects=50000 visible=35514 culled=14486 CPU_ms=0.133482
-Profiling: 6 zones, total 1.47402 ms -> emergent_profile.json
+Native scene self-test: objects=50000 visible=35514 culled=14486 CPU_ms=0.108119
+Profiling: 8 zones, total 3.19182 ms -> emergent_profile.json
 Tracy: not compiled in (-DEMERGENT_ENABLE_TRACY=ON)
 
 $ ctest --test-dir build/native
-100% tests passed, 0 tests failed out of 6
+100% tests passed, 0 tests failed out of 9
 ```
 
 `first_dynamic_y=0.48` is a real measurement: the seeded body starts at `y=4.0`, falls under gravity, and comes to rest on the ground plane at `y≈0.5`. `head_y=0.518` is a model-space joint position resolved through ozz's `LocalToModelJob` one second into a walk cycle; the rest-pose height is `0.52`. `ratio=0.1068` is the real stored-to-original byte ratio of a pack written during that run.
+
+### Frame loop
+
+`native/src/frame_loop.cpp` is the thing that makes the native engine an engine
+rather than a self-test. Physics runs at a fixed 1/60s step and presentation
+runs at the display rate, and the two are joined by an interpolation fraction.
+
+The split is deliberate and is the difference between a loop that is smooth and
+one that is reproducible:
+
+- **Physics is fixed.** Real time accumulates in an accumulator and drains in
+  whole 1/60s steps. A solver is a function of its timestep, so feeding it a 4ms
+  step one frame and a 31ms step the next produces different contact resolution
+  for the same input, and the difference compounds.
+- **Presentation is variable.** A frame renders at whatever real time has
+  passed, with the leftover fraction `alpha`, and the character is drawn
+  interpolated between the last two simulation states. Nothing that affects the
+  simulation is driven from that variable delta.
+- **Animation is variable too, once per frame.** A clip is a pure function of
+  elapsed time with no state that can diverge, so driving it at the
+  presentation rate is safe and keeps motion smooth at 144Hz. Driving it inside
+  the substep loop would make a 144Hz display animate in visible 60Hz steps.
+
+Two guards, both tested. A stalled frame is clamped to 250ms and to 8 physics
+steps, and the leftover backlog is **discarded rather than carried** — carrying
+it is the start of the spiral of death, where each frame falls further behind
+and costs more to catch up. A non-finite delta is a failed clock, not a stall,
+and is discarded rather than clamped, because clamping infinity would simulate
+time that never happened.
+
+```
+$ ./build/native/emergent_native --hz 144 --frames 576 --walk
+Requested 144Hz: each frame is 6.9444ms, the physics step is 16.6667ms
+Frame loop: ran=576 frame=575 steps=0 sim=3.983s alpha=0.99999999999999001 (16.667ms to the next step) ...
+
+$ ./build/native/emergent_native --hz 30 --frames 120 --walk
+Requested 30Hz: each frame is 33.3333ms, the physics step is 16.6667ms
+Frame loop: ran=120 frame=119 steps=2 sim=4.000s alpha=0 (0.000ms to the next step) ...
+```
+
+`alpha=0.99999999999999001` on the 144Hz line is worth a note: the accumulator has landed one unit in the last place under a step, so `alpha` is the largest double below 1. Every fixed-point format rounds that to `1`, which would read as a broken invariant. The loop pulls it back explicitly rather than relying on the division, and a test asserts `alpha < 1` across four thousand 144Hz frames.
+
+Same four seconds, same 240 physics steps, same ending position — from 120
+frames of 33ms and from 576 frames of 7ms. That is the property the loop exists
+to provide, and it is asserted directly too: 60 frames at 1/60s and 30 frames
+at 1/30s take the same 60 steps and end in the same place, and the same delta
+and input sequence over 500 frames is bit-identical in position and pose.
+
+One subtlety worth recording, because it is a bug that looks fine: on a frame
+that takes **no** physics step — half of all frames at 144Hz — the
+interpolation window has to be collapsed onto the current state. Left alone,
+`previous` still holds the state from before the last stepping frame and the
+renderer is handed a position *behind* the simulation.
+
+### Rendering
+
+`RenderBackend` (`native/include/emergent/render_backend.hpp`) is the interface
+between the loop and whatever draws it, and `FrameState` is the contract: the
+interpolated character transform, both simulation states it was interpolated
+from, the velocity, the resolved ozz joint matrices, and the drawable scene
+boxes with entry 0 being the character.
+
+`VulkanRenderBackend` implements it for real: render pass, depth target,
+graphics pipeline, an instanced draw of the scene boxes and the skeleton driven
+straight from the pose matrices, per-frame buffer uploads, and
+acquire/submit/present. It takes a swapchain when a window is attached and an
+offscreen colour+depth target when one is not.
+
+`NullRenderBackend` is the headless implementation and is not a stub. It
+validates every frame state — non-finite transforms, alpha outside `[0,1)`, a
+joint count without matrices, a scene box count without boxes — and refuses to
+count a rejected frame as submitted. A loop that produces a NaN fails there, on
+a machine with no GPU, instead of becoming a lost device on someone else's.
+
+The GLSL in `native/shaders/` is compiled to SPIR-V at build time when `glslc`
+or `glslangValidator` is present, and skipped cleanly when it is not. The
+engine, the tests and CI all build and run without a shader toolchain; the
+renderer reports `shader module unavailable` by name rather than failing to
+start. The SPIR-V loader itself is tested directly, including truncated and
+wrong-magic modules — the checks that stop a corrupt asset from reaching
+`vkCreateShaderModule`, where it becomes undefined behaviour inside a driver
+rather than an error.
+
+**No line of the Vulkan render path has ever executed.** See below.
 
 ### Skeletal animation
 
@@ -191,3 +278,11 @@ The engine instruments its real subsystems and writes `emergent_profile.json` on
 ### Vulkan runtime status
 
 The Vulkan backend compiles, links, and is exercised for capability probing, but it cannot *execute* in a container with no GPU: there is no ICD and no `/dev/dri`, so `vkCreateInstance` correctly returns `VK_ERROR_INCOMPATIBLE_DRIVER` and the engine reports that rather than fabricating GPU work. A real GPU device is required to validate the render path.
+
+This applies to `VulkanRenderBackend` in full. Its `open()` returns false here, with a status saying why, and nothing below it has run. The 500-odd lines under `open()` are compile- and link-checked against Vulkan 1.3 headers and nothing more; they should be treated as unexercised until someone runs them where a driver exists. The offscreen branch needs no window and will be the first thing to work there.
+
+### No windowing dependency
+
+There is no GLFW, SDL or XCB in this tree, and that is a decision rather than a gap. A window library owns a display connection, an event queue and a native surface handle; all three are platform-specific and none can be stubbed without inventing a fake display server. `SurfaceProvider` reduces a window to the four things a renderer actually asks of one, and creating the platform's `VkSurfaceKHR` is the provider's job — which is also why `VulkanBackend::initialize()` takes the instance extensions up front, since a surface extension cannot be added after `vkCreateInstance`.
+
+Adding a real window is one class. Nothing in the frame loop, the physics, the animation or the render path changes to accommodate it. The trade is stated in full in `docs/OPEN_SOURCE_DECISIONS.md`.

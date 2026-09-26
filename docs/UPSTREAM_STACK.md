@@ -21,8 +21,12 @@ A dependency is only listed here once something in the tree calls it. Because a 
 ```
 $ nm -C build/native/emergent_native | grep -c "ozz::"   # -> 188
 $ nm -C build/native/emergent_native | grep -c "ZSTD_"   # -> 450
-$ nm -C build/native/emergent_native | grep -c "JPH::"   # -> 4656
+$ nm -C build/native/emergent_native | grep -c "JPH::"   # -> 4657
 ```
+
+Tracy's count is 0 in the default build because `EMERGENT_ENABLE_TRACY` is off there; the Tracy-enabled configuration is the one that carries the symbols, and CI builds and tests both.
+
+No windowing library is on this list. `SurfaceProvider` is an interface, not a dependency, and the reasoning is in `docs/OPEN_SOURCE_DECISIONS.md`. A window library cannot be stubbed without inventing a fake display server, so EMERGENT takes the four things a renderer actually asks of a window and lets a platform backend supply them.
 
 The Forge remains an upstream renderer/framework candidate, but it is not falsely claimed as integrated until its actual source/build system is present and its renderer replaces the current Vulkan bootstrap rather than merely coexisting with it.
 

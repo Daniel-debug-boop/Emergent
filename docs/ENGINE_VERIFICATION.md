@@ -214,6 +214,131 @@ $ ctest --test-dir build/native
 `ratio=0.1068` is the stored-to-original byte ratio of a pack written during
 that run.
 
+## 2026-09-26 — the frame loop, and a renderer that says what it did
+
+### What was added
+
+`native/include/emergent/frame_loop.hpp`, `native/src/frame_loop.cpp`, and
+`native/tests/frame_loop_test.cpp` (125 behaviour checks).
+
+The loop runs a **fixed** 1/60s physics step and a **variable** render rate,
+joined by an interpolation fraction:
+
+- Real time accumulates and drains in whole 1/60s steps, so the number of
+  steps taken over one second of simulated time is 60 whatever the frame rate.
+- A frame renders at the leftover fraction `alpha`, with the character's
+  transform interpolated between the last two simulation states.
+- Animation is advanced **once per frame by the real delta**, never per physics
+  substep, and is resolved into joint matrices for the renderer.
+- Input is applied per **substep**, so input integrated over 50ms produces the
+  same result whether that 50ms arrived as one frame or three.
+
+Two guards, both tested:
+
+- A frame's real delta is clamped to `maxFrameDelta` (250ms) and its step count
+  to `maxSubSteps` (8). Hitting the cap sets `stepsDropped` and discards the
+  backlog, because carrying it forward is the start of the spiral of death.
+- A non-finite or negative delta is treated as zero, not clamped. An infinite
+  delta is a failed clock, not a stall, and clamping it would simulate time that
+  never happened.
+
+`JoltPhysicsWorld` gained stable body handles plus `bodyPosition`,
+`bodyVelocity`, `setBodyVelocity` and `setBodyPosition`. A frame loop cannot
+read or drive a body through `firstDynamicY()`.
+
+### Verified here
+
+`emergent_frame_loop` — 125 checks, all passing, 12 consecutive runs, no flakes.
+The three that matter most:
+
+- **Frame-rate independence.** 60 frames at 1/60s and 30 frames at 1/30s take
+  the same 60 physics steps and end with the character in the same place to
+  1e-4. Confirmed end to end through the shipped binary as well: 4 seconds of
+  `--walk` at 30Hz, 90Hz and 144Hz all end at `pos z=16.11`.
+- **Determinism.** The same delta sequence and input sequence over 500 frames
+  produces bit-identical positions and bit-identical joint matrices. Jolt's
+  multi-threaded solve is deterministic for a fixed thread count, which is what
+  this run has.
+- **Interpolation correctness.** The rendered position equals
+  `lerp(previous, next, alpha)` exactly. On a frame that takes no step —
+  half of all frames at 144Hz — the window collapses so `previous == next ==
+  position` and nothing is drawn behind the simulation.
+
+Also verified: alpha stays in [0,1) over 400 irregular frames and over 4000
+144Hz frames; animation advances exactly one real delta on a four-substep
+frame; locomotion selects run/walk/idle from speed with hysteresis; a diagonal
+input is normalised so it is not 41% faster than a cardinal; a jump leaves the
+ground and holding the button does not re-trigger it; walking into the prop
+ring stops the character; `reset()` returns it to spawn.
+
+### Three real bugs found while building this
+
+Recorded because each of them was invisible until something was actually
+asserted, and each is the kind of thing that ships.
+
+- **`endFrame()` counted rejected frames as submitted.** `NullRenderBackend`
+  incremented `submittedFrames` on every `endFrame()` regardless of whether
+  `drawFrame()` had accepted the frame. Four malformed frames turned one
+  submitted frame into five. A frame counter that over-reports is worse than
+  no counter, because it is the number people believe. `endFrame()` now
+  consults whether the frame was actually drawn.
+- **`alpha` could equal exactly 1.0.** The documented contract is `[0,1)`. On
+  a frame that took no step, `accum` is provably below `fixedDelta`, but
+  dividing `(fixedDelta - 1ulp) / fixedDelta` rounds to exactly `1.0` in
+  double. This is the *common* case at 144Hz, not a corner. Harmless to an
+  interpolator, which produces the same point either way, and a violation of
+  the contract to everyone else. The loop now pulls it back to the largest
+  double below 1, and a test asserts it over four thousand 144Hz frames.
+- **The character spawned at Jolt's seeded height, not the configured one.**
+  `playerSpawnY` was only applied by `reset()`, so a fresh loop started with the
+  body four units up and fell out of frame one. Every test that settled the
+  character first hid it; the real-time run showed `y=3.63` after 0.28s and made
+  it obvious.
+
+Two smaller ones: a test expected infinity to be clamped rather than discarded
+(a failed clock is not a stall, and clamping it would simulate time that never
+happened), and `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` has no
+`currentFormat` — the format comes from the surface's format list.
+
+### The renderer
+
+`native/include/emergent/render_backend.hpp` defines `RenderBackend` and
+`SurfaceProvider`. `NullRenderBackend` is a real implementation, not a stub: it
+validates every `FrameState` (NaN transforms, alpha outside [0,1), a joint
+count without matrices, a scene box count without boxes) and refuses to count a
+rejected frame as submitted. That check is what catches a broken loop on a
+machine with no GPU instead of on someone else's.
+
+`native/src/vulkan_render.cpp` implements `VulkanRenderBackend`: render pass,
+depth target, graphics pipeline, instanced draw of the scene boxes and the
+ozz skeleton driven by the pose matrices, per-frame uploads, an orbit camera,
+and acquire/render/submit/present. It picks a real swapchain when a
+`SurfaceProvider` supplies a `VkSurfaceKHR` and an offscreen colour+depth target
+when one does not.
+
+`native/src/frame_loop.cpp` also owns the drawable scene: `FrameState` carries
+`sceneBoxes`, entry 0 being the character at its interpolated position.
+
+### What is NOT verified
+
+**No line of the Vulkan render path has ever executed.** There is no Vulkan ICD
+and no `/dev/dri` in this environment, so `vkCreateInstance` returns
+`VK_ERROR_INCOMPATIBLE_DRIVER` and `VulkanRenderBackend::open()` returns false
+with a status explaining why. The 500 lines below `open()` are compile- and
+link-verified against Vulkan 1.3 headers and nothing more. Treat them as
+unexercised until someone runs them on a machine with a driver.
+
+The GLSL in `native/shaders/` is **not compiled** here: no `glslc` and no
+`glslangValidator` are installed, so no `.spv` files exist. The CMake step that
+compiles them is wired in and skips cleanly when the tool is absent, and
+`open()` reports `shader module unavailable` by name. `loadSpirvModule` itself
+is tested directly, including the truncated and wrong-magic cases.
+
+There is still no window. `SurfaceProvider` is the single extension point and
+no implementation of it exists in this tree, so the swapchain branch of
+`VulkanRenderBackend` is unexercised. The offscreen branch does not need a
+window and will be the first thing to work on a GPU machine.
+
 ## Still not integrated
 
 **KTX / Basis Universal.** A compressed-texture path needs authored `.ktx2`

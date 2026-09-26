@@ -85,7 +85,8 @@ jobs:
             emergent_physics_test \
             emergent_animation_test \
             emergent_asset_pack_test \
-            emergent_profiling_test
+            emergent_profiling_test \
+            emergent_frame_loop_test
 
       # No GPU is present on the runner, so the Vulkan backend reports
       # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
@@ -131,5 +132,24 @@ jobs:
             emergent_physics_test \
             emergent_asset_pack_test \
             emergent_animation_test \
-            emergent_profiling_test
+            emergent_profiling_test \
+            emergent_frame_loop_test
           ctest --test-dir build/tracy --output-on-failure
+
+      # The frame loop is the one subsystem whose bugs are invisible: a loop
+      # that runs, animates and does not crash can still be advancing physics
+      # at the frame rate, interpolating one substep behind, or stepping
+      # animation once per substep. These two runs pin the two paths the test
+      # binary cannot see - the shipped executable driven from its CLI, and
+      # the real-time clock rather than a fixed delta. The 90 Hz first leg
+      # matters specifically because 90 is not a multiple of 60: it is the case
+      # where a loop that wrongly ties steps to frames drifts visibly.
+      - name: Run the shipped frame loop at three rates
+        run: |
+          for hz in 30 90 144; do
+            echo "=== ${hz} Hz, four seconds ==="
+            ./build/native/emergent_native --hz "$hz" --frames $((hz * 4)) --walk
+          done
+
+      - name: Run the shipped frame loop against the real clock
+        run: ./build/native/emergent_native --realtime 1.0 --walk
