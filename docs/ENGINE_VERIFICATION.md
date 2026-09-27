@@ -676,6 +676,77 @@ Verified by deleting the packs: the build repacks them, the test finds them, and
 reports zero skips.
 
 
+## 2026-09-27 — the one measured stall, spread over fourteen frames
+
+### What the profiler said
+
+One zone, out of nine, had anything to say:
+
+| Zone | Calls | Total | Max |
+|---|---|---|---|
+| `frame.scene_stream` | 120 | 35.04 ms | **35.03 ms** |
+| `frame.physics` | 180 | 1.18 ms | 0.04 ms |
+| `frame.animation` | 180 | 0.16 ms | 0.003 ms |
+| `scene.cull` | 1 | 0.08 ms | 0.08 ms |
+
+One call of 35 ms in a 16.7 ms frame. That is the whole streamed slice -- 210,628
+triangles assembled inside a single frame -- and it fires every time the player
+crosses a chunk boundary, which is every ~50 seconds of walking. It has been
+there since the streamer was first wired up, and nothing about it was visible in
+a screenshot.
+
+### What changed
+
+`SceneBuilder` makes the build resumable. `begin()` starts a slice; `step()`
+emits until a triangle budget is spent. The streamer calls it once per frame
+with a 12,000-triangle budget, which is about a third of a frame at this class
+of machine, leaving room for the physics step, the animation sampling and the
+draw submission that share it.
+
+**Measured: 14 frames, heaviest step 29,728 triangles, mesh unchanged at 631,884
+vertices.**
+
+The previous mesh stays on screen until the new one is ready, rather than
+swapping to an empty vertex buffer and rendering nothing for 14 frames.
+
+### Why it is safe, and how that is known
+
+Only the *timing* changes. Both paths drive one set of phase functions --
+`emitGround`, `emitRoads`, `emitWater`, `planBuildings`, `emitBuildingsRange`,
+`emitProps` -- so they cannot disagree about what a building is made of. And the
+byte-identity test is the real check, because "same triangle count" is exactly
+the kind of assertion that passes while the city comes out subtly wrong:
+
+`the amortized build is byte-identical to the one-shot build` runs at five
+budgets, from 500 triangles to more than the whole slice, and compares **every
+vertex**.
+
+The control is what makes it worth having: emitting the buildings in a different
+order leaves the count identical and fails only the byte comparison.
+
+### Three things I got wrong, all caught by output rather than by reading
+
+| Symptom | Cause |
+|---|---|
+| Every slice came back with 0 vertices and 28 buildings counted | The per-phase slice boundaries swallowed the original function's tail, so `emitProps` moved the vertex buffer out from under `finishScene` |
+| `largestStep()` reported 4,294,757,004 | Measured after the final step drained the builder, so `after - before` underflowed. Measured inside `advance()` now |
+| The first version of the test aborted on a material lookup | `begin()` holds the world and material table by reference across frames. Right for the engine, which owns both; a caller passing a temporary reads freed memory. The lifetime requirement is now on the declaration |
+
+### Where the assertion lives, and why
+
+The amortization bound is a C++ assertion
+(`no single step is the whole slice`), not a ctest regex, because "the heaviest
+step is under a quarter of the slice" is arithmetic and CMake cannot do
+arithmetic. That distinction is not academic: a control that made the build stop
+early still produced three frames, **passed the ctest**, and was caught twice by
+the C++ test.
+
+`emergent_native_scene_stream` now runs 240 frames rather than 5, because the
+build needs 14 and a test that runs 5 and asserts a finished mesh asserts
+nothing.
+
+`ctest` **18/18**.
+
 ## Keeping this honest
 
 `.github/workflows/native.yml` clones the same pinned revisions, configures,

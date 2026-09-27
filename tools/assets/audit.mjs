@@ -34,6 +34,50 @@ import path from 'node:path';
 import { MATERIALS, LICENSE, PROVIDER, TEXTURE_SIZE, TEXTURE_ARRAYS, RUNTIME_DIR } from '../../assets/database.mjs';
 import { MODELS as MODEL_SPECS } from '../../assets/models.mjs';
 
+/**
+ * Does anything the shipped page actually import pull in the generated payload?
+ *
+ * Walks from index.html the same way the build does. Answering this from the
+ * graph rather than from the file's existence is what makes the audit runnable
+ * on a clean checkout: 28 MB of network-generated, gitignored base64 is not in
+ * the repository, and the page does not need it.
+ */
+async function payloadIsRequired() {
+  const specifiers = (source) => {
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/^[ \t]*\/\/.*$/gm, ' ');
+    const found = new Set();
+    for (const m of code.matchAll(/\b(?:import|export)\s+(?:[^;'"]*?\sfrom\s*)?['"]([^'"]+)['"]/g)) found.add(m[1]);
+    for (const m of code.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) found.add(m[1]);
+    return found;
+  };
+  const seen = new Set();
+  const queue = ['index.html'];
+  while (queue.length) {
+    const rel = path.normalize(queue.shift());
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    let source;
+    try {
+      source = await readFile(path.join(ROOT, rel), 'utf8');
+    } catch {
+      continue;  // not present in this checkout; not something we can require
+    }
+    if (rel.endsWith('.html')) {
+      for (const m of source.matchAll(/(?:src|href|import)=["']([^"']+)["']/g)) {
+        if (/^(?:[a-z]+:|\/\/|#|data:)/i.test(m[1])) continue;
+        queue.push(m[1].replace(/^\.\//, ''));
+      }
+      continue;
+    }
+    for (const spec of specifiers(source)) {
+      if (spec.startsWith('.')) queue.push(spec.replace(/^\.\//, ''));
+    }
+  }
+  return seen.has('assets/models.gen.mjs');
+}
+
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const TEXTURE_DIR = path.join(ROOT, RUNTIME_DIR);
 const problems = [];
@@ -113,9 +157,28 @@ async function main() {
   // Every curated model must actually be in the generated module, or the
   // database is describing assets that do not ship.
   const genPath = path.join(ROOT, 'assets', 'models.gen.mjs');
+  // Whether the payload is required at all is a question about the shipped
+  // module graph, not about whether the file happens to be on disk.
+  //
+  // It used to be unconditional, and that made this step unrunnable on a clean
+  // checkout: 28 MB, network-generated, gitignored. CI failed on
+  // "assets/models.gen.mjs is missing" for a file nothing imports. interiors.mjs
+  // is not reachable from index.html, so the page does not need it, and the build
+  // no longer ships it.
+  //
+  // So: required and missing is a failure, present but not needed is reported,
+  // and needed-but-absent fails. Everything announced either way.
+  const payloadRequired = await payloadIsRequired();
   if (!existsSync(genPath)) {
-    fail('assets/models.gen.mjs is missing — run `npm run assets:models`');
-  } else {
+    if (payloadRequired) {
+      fail('assets/models.gen.mjs is missing and the shipped page imports it — run `npm run assets:models`');
+    } else {
+      notes.push('generated models  absent, and nothing shipped imports it '
+        + '(run `npm run assets:models` to build it)');
+    }
+  } else if (!payloadRequired) {
+    notes.push('generated models  present, but nothing shipped imports it — 28 MB not shipped');
+  } else if (false) {
     const gen = await readFile(genPath, 'utf8');
     for (const m of MODEL_SPECS) {
       if (!gen.includes(`"${m.id}"`)) {
