@@ -585,31 +585,37 @@ add_test(NAME emergent_render_graph COMMAND emergent_render_graph_test)
 # part that allocates VkImage and VkBuffer is only reachable on a machine that
 # has a driver. That split is the whole reason the graph was ported with its
 # own `Format` rather than using VkFormat.
-add_library(emergent_render_graph_vulkan STATIC native/src/render_graph_vulkan.cpp)
-target_include_directories(emergent_render_graph_vulkan PUBLIC native/include)
-target_link_libraries(emergent_render_graph_vulkan PUBLIC emergent_render_graph)
-set_target_properties(emergent_render_graph_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
-if(UNIX)
-  target_compile_options(emergent_render_graph_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
-endif()
-# Volk, for the same reason the renderer links it: the `vk*` entry points are
-# resolved through the loader at runtime, so this library links and runs on a
-# machine with no Vulkan driver at all.
+# The header includes <volk.h>, because the `vk*` entry points are resolved
+# through the loader at runtime and this is how the rest of the renderer reaches
+# Vulkan. Volk is optional in this project -- a Tracy-only configuration builds
+# with EMERGENT_BUILD_ENGINE=OFF and never fetches it -- so the whole binding
+# layer is conditional on it rather than half-configured.
 #
-# The target is probed directly rather than through EMERGENT_HAS_VOLK because
-# this library is defined before that variable is set, and a cache-order
-# dependency between two unrelated targets is the kind of thing that only
-# breaks on someone else's configure.
+# The skip is announced rather than silent. A target that quietly does not exist
+# is the same failure this file already records twice: ctest reports a missing
+# test executable as "Not Run" rather than as a failure, so an omission reads as
+# a pass. The default CI configuration has Volk and exercises both the test and
+# the negative controls, which is where the coverage lives.
 if(TARGET volk)
-  target_link_libraries(emergent_render_graph_vulkan PUBLIC volk)
-endif()
+  add_library(emergent_render_graph_vulkan STATIC native/src/render_graph_vulkan.cpp)
+  target_include_directories(emergent_render_graph_vulkan PUBLIC native/include)
+  target_link_libraries(emergent_render_graph_vulkan PUBLIC emergent_render_graph volk)
+  set_target_properties(emergent_render_graph_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(UNIX)
+    target_compile_options(emergent_render_graph_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+  endif()
 
-add_executable(emergent_render_graph_vulkan_test native/tests/render_graph_vulkan_test.cpp)
-target_link_libraries(emergent_render_graph_vulkan_test PRIVATE emergent_render_graph_vulkan)
-if(UNIX)
-  target_compile_options(emergent_render_graph_vulkan_test PRIVATE -Wall -Wextra -Wpedantic)
+  add_executable(emergent_render_graph_vulkan_test native/tests/render_graph_vulkan_test.cpp)
+  target_link_libraries(emergent_render_graph_vulkan_test PRIVATE emergent_render_graph_vulkan)
+  if(UNIX)
+    target_compile_options(emergent_render_graph_vulkan_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME emergent_render_graph_vulkan COMMAND emergent_render_graph_vulkan_test)
+else()
+  message(STATUS
+    "Volk not configured: the render graph Vulkan binding layer and its test are "
+    "not built. The CPU-side graph is still built and tested.")
 endif()
-add_test(NAME emergent_render_graph_vulkan COMMAND emergent_render_graph_vulkan_test)
 
 # ---------------------------------------------------------------------------
 # Shader compilation
