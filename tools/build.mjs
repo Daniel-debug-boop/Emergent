@@ -30,7 +30,8 @@ const OUT = path.join(ROOT, 'dist');
 const FILES = [
   'index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs',
   'physics.mjs', 'missions.mjs', 'input.mjs', 'geometry.mjs', 'city.mjs',
-  'materials.mjs', 'textures.mjs'
+  'materials.mjs', 'textures.mjs', 'budget.mjs', 'gltf.mjs', 'lod.mjs',
+  'interiors.mjs'
 ];
 
 /**
@@ -41,6 +42,11 @@ const FILES = [
  * manifest is derived from what the bake produced, and the dist-boot test fails
  * if the descriptor the game imports is not among the files that shipped.
  */
+// The generated model set is listed by name rather than swept: it is a single
+// 28 MB file, and a glob that picked up its neighbours would ship the whole
+// 78 MB of raw source geometry with it. A missing entry is a 404 on the first
+// frame that tries to furnish a room, so the build checks for it explicitly.
+const ASSET_FILES = [['assets/models.gen.mjs', 'assets/models.gen.mjs']];
 const ASSET_DIRS = [['assets/textures', 'assets/textures']];
 
 /**

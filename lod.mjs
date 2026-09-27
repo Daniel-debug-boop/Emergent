@@ -106,11 +106,19 @@ export function sequentialIndices(count) {
 }
 
 /**
- * What fraction of the vertices are referenced by more than one index.
+ * How many triangle corners each vertex accounts for, on average.
  *
- * Zero means the mesh is a soup and cannot be decimated. Exposed because the
- * number is the difference between "the simplifier ran" and "the simplifier
- * had nothing to do", and the two produce identical-looking output.
+ * Exactly 1 means a triangle soup: every corner is a distinct vertex, so every
+ * vertex sits on its own border and the simplifier is not allowed to collapse
+ * anything. A welded mesh is higher — a single quad reads 1.5, and the measured
+ * Poly Haven bed frame reads 5.85.
+ *
+ * The unit matters. An earlier version reported *triangles per vertex* instead,
+ * which for a soup of two triangles over six vertices is 0.33 rather than 1 —
+ * so the caller's "at most 1.0 means a soup" test never fired and the soup check
+ * silently passed everything, which is the exact failure the function exists to
+ * prevent. Dividing the index count by the used-vertex count puts both cases on
+ * one scale where 1.0 is the boundary.
  */
 export function sharingRatio(vertexCount, indices) {
   if (!indices || !indices.length) return 0;
@@ -118,7 +126,8 @@ export function sharingRatio(vertexCount, indices) {
   for (let i = 0; i < indices.length; i++) used[indices[i]] = 1;
   let n = 0;
   for (let i = 0; i < vertexCount; i++) n += used[i];
-  return n === 0 ? 0 : indices.length / n / 3;
+  if (n === 0) return 0;
+  return indices.length / n;
 }
 
 /**

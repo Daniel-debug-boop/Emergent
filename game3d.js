@@ -3,6 +3,7 @@ import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
 import { MATERIAL_DESCRIPTOR } from './assets/textures/materials.mjs';
 import { buildMaterialTable, MAX_MATERIALS } from './materials.mjs';
+import { createBudget, observe as budgetObserve, retarget as budgetRetarget, baseDetailRadius, staticDetailFor, describe as describeBudget } from './budget.mjs';
 import { createMaterialTextures, bindMaterialTextures as bindTextures, mipLevels, UNITS } from './textures.mjs';
 import { createGeometryKit, VERTEX_FLOATS, VERTEX_BYTES } from './geometry.mjs';
 import { buildBuilding, buildRoad, buildTree, buildBush, dressStreet, dressBuilding, buildCrossing, buildCar, buildCarProxy, buildCharacter, buildCharacterProxy } from './city.mjs';
@@ -677,6 +678,11 @@ function flattenCells(cells) {
 }
 
 let staticBuildMs=0, dynamicBuildMs=0, staticBytes=0;
+// The vertex budget controller. Created here rather than per build, so the
+// fitted radius survives across streaming steps — a controller that forgot its
+// state every frame would never see two builds at different radii and so could
+// never measure the cost curve it depends on.
+const vertexBudget = createBudget(qualityLevel, rendererMode === 1);
 
 function buildStaticScene() {
   if (!world || !player) return;
@@ -685,19 +691,26 @@ function buildStaticScene() {
   const shadowBuilder = makeChunkBuilder();
   const radius = qualityLevel===0?680:qualityLevel===1?800:qualityLevel===2?980:1160;
   const adaptive = rendererMode===1;
-  const staticDetail=adaptive?0.55+qualityLevel*0.12:0.82+qualityLevel*0.06;
-  // The distance over which detail is spent, as a fraction of what is actually
-  // streamed.
+  const staticDetail = staticDetailFor(qualityLevel, adaptive);
+  // How far detail is spent, and why it is a measured number rather than a
+  // constant.
   //
   // Streaming radius and detail radius are different things and conflating them
   // is what makes procedural cities either empty at 300 m or unaffordable. The
   // stream exists so the world continues past the horizon; the detail radius
   // exists so that a building the player can actually read has its windows, its
   // cornice and its roof plant, and one 800 m away is a correctly materialled
-  // mass with the right silhouette. The exponent front-loads the falloff, which
-  // puts the budget where a player is looking instead of spreading it evenly
-  // over ground they will never walk on.
-  const detailRadius=(260+qualityLevel*180)*(adaptive?0.6:1);
+  // mass with the right silhouette.
+  //
+  // It used to be the fixed expression `(260 + qualityLevel*180) * ...`, which
+  // is a guess about how many vertices a radius costs. It is right for one world
+  // at one density and wrong everywhere else: a district three times denser
+  // spends three times the geometry at identical settings and nothing notices.
+  // A radius is also the wrong control variable — submitted vertices depend on
+  // where the camera looks, and a radius spends the same budget facing a wall as
+  // facing a skyline. So the radius is now fitted to a vertex target by
+  // `budget.mjs`, which measures each build and corrects.
+  const detailRadius = vertexBudget.detailRadius;
   terrainChunk(builder,player.x,player.z,radius,staticDetail);
   const activeChunks = refreshStreamResidency(radius);
   syncBuildingColliders(activeChunks);
@@ -754,8 +767,20 @@ function buildStaticScene() {
   gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,shadowData.vertices,gl.STATIC_DRAW);shadowVertexCount=shadowData.vertices.length/VERTEX_FLOATS;
   staticBytes=staticData.vertices.byteLength;
   streamOps++; streamGenerated=streamResidency.generated; streamFreed=streamResidency.evicted;
-  streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}`;
+  // The detail radius is part of the key. Without it the budget controller
+  // adjusts the radius and nothing rebuilds, so the loop is open: the game
+  // measures a cost, corrects, and the correction is never applied. It is the
+  // kind of omission that makes a control system look inert rather than broken,
+  // because every measurement is plausible and nothing ever changes.
+  //
+  // Quantised to 4 m because the controller dead-bands at 6% and sub-metre
+  // wobble must not trigger a full scene rebuild.
+  streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}|${Math.round(detailRadius/4)}`;
   if($('loading')) $('loading').style.display='none';
+  // Close the feedback loop: hand the measured cost back to the controller so
+  // the *next* build spends a radius that fits the budget. This is the only
+  // line that makes the budget a control loop rather than a constant.
+  budgetObserve(vertexBudget, staticVertexCount);
   staticBuildMs=performance.now()-t0;
   return staticBuildMs;
 }
@@ -1493,8 +1518,12 @@ function frame(now){
 
 function resize(){canvas.width=Math.floor(innerWidth*Math.min(devicePixelRatio||1,1.5));canvas.height=Math.floor(innerHeight*Math.min(devicePixelRatio||1,1.5));canvas.style.width='100%';canvas.style.height='100%';}
 
-function cycleRenderer(){rendererMode=rendererMode?0:1;streamKey='';showToast(`Renderer: ${MODES[rendererMode]}.`);}
-function cycleQuality(){qualityLevel=(qualityLevel+1)%QUALITY.length;streamKey='';showToast(`Quality: ${QUALITY[qualityLevel]}.`);}
+// Changing quality or renderer mode changes the target, so the fitted scale is
+// discarded rather than carried over. Keeping it would ask the next scene to
+// spend a radius calibrated for a budget that is no longer in play, which is how
+// a controller ends up convinced the world is ten times denser than it is.
+function cycleRenderer(){rendererMode=rendererMode?0:1;budgetRetarget(vertexBudget,qualityLevel,rendererMode===1);streamKey='';showToast(`Renderer: ${MODES[rendererMode]}.`);}
+function cycleQuality(){qualityLevel=(qualityLevel+1)%QUALITY.length;budgetRetarget(vertexBudget,qualityLevel,rendererMode===1);streamKey='';showToast(`Quality: ${QUALITY[qualityLevel]}.`);}
 
 function bindTouch(){
   const stick=$('stick'), knob=$('knob');let active=false,startX=0,startY=0;
@@ -1541,6 +1570,17 @@ globalThis.EMERGENT = {
       recomputed, reused, visibleObjects, simulatedNpcCount, streamOps,
       streamGenerated, streamFreed, residentChunks: streamResidency.active.size,
       staticBuildMs, dynamicBuildMs, staticBytes, materialLayers: MATERIALS.count,
+      // The measured budget, so a test can assert the control loop closed
+      // rather than that a constant happened to be right.
+      budget: {
+        target: vertexBudget.target, actual: vertexBudget.lastActual,
+        percent: vertexBudget.target ? Math.round(vertexBudget.lastActual / vertexBudget.target * 100) : 0,
+        detailRadius: Math.round(vertexBudget.detailRadius),
+        scale: +vertexBudget.scale.toFixed(3),
+        exponent: +vertexBudget.exponent.toFixed(2),
+        corrections: vertexBudget.corrections,
+        summary: describeBudget(vertexBudget)
+      },
       lastViewProjection: lastPV
     };
   },
