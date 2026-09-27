@@ -12,11 +12,40 @@
  * Run: `npm run test:models`
  */
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { existsSync } from 'node:fs';
 import { importGltf, mat4Identity, mat4Multiply, mat4Compose, mat4TransformPoint, normalMatrix } from './gltf.mjs';
 import { splitForSimplify, sequentialIndices, sharingRatio, buildLodChain, setSimplifier } from './lod.mjs';
 import { MODELS as SPECS, ROOM, modelSpec } from './assets/models.mjs';
-import { MODELS as BAKED, ROOM as GEN_ROOM, FLOATS_PER_VERTEX, lodVertices, MODEL_IDS } from './assets/models.gen.mjs';
+import { setModelSet, modelSetLoaded, FLOATS_PER_VERTEX, lodVertices } from './assets/models.index.mjs';
+
+// The baked payload is an artefact, not a source file: 28 MB of base64 vertex
+// data that `npm run assets:models` produces from Poly Haven. It is not in git,
+// so importing it statically made this suite fail on every clean checkout --
+// which is how it reached CI.
+//
+// The pipeline under test is the importer, the simplifier, the LOD chain and the
+// interior builder, and all four are exercised below against the committed
+// spec. The payload checks that follow verify the *bake*, and run only when the
+// bake is present. They say so either way, because a skipped check that does not
+// announce itself is the failure mode this file already had once.
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const GENERATED = join(ROOT, 'assets', 'models.gen.mjs');
+
+let BAKED = null;
+let GEN_ROOM = null;
+let MODEL_IDS = [];
+let payloadLoaded = false;
+if (existsSync(GENERATED)) {
+  const generated = await import(new URL(GENERATED, import.meta.url).href);
+  MODEL_IDS = setModelSet(generated);
+  BAKED = generated.MODELS;
+  GEN_ROOM = generated.ROOM;
+  payloadLoaded = modelSetLoaded();
+}
+console.log(payloadLoaded
+  ? `baked payload present: ${MODEL_IDS.length} models`
+  : `baked payload absent (${relative(ROOT, GENERATED)}) -- the bake checks below are skipped, not passed`);
 import { buildMaterialTable } from './materials.mjs';
 import { createGeometryKit, VERTEX_FLOATS } from './geometry.mjs';
 import { MATERIAL_DESCRIPTOR } from './assets/textures/materials.mjs';
@@ -39,6 +68,25 @@ async function test(name, fn) {
   } catch (err) {
     currentTest.error = err.stack || String(err);
   }
+}
+
+/**
+ * A check that needs the baked payload.
+ *
+ * Skipping is reported three ways -- a per-test line, a count in the summary,
+ * and a banner naming the file that is missing -- because a check that skips
+ * without saying so is indistinguishable from a check that passes. That is not
+ * a hypothetical: this suite imported the payload statically and so failed on
+ * every clean checkout, which is how it reached CI.
+ */
+let skippedForBake = 0;
+async function bakeTest(name, fn) {
+  if (!payloadLoaded) {
+    skippedForBake++;
+    console.log(`~ skipped (no bake): ${name}`);
+    return;
+  }
+  await test(name, fn);
 }
 
 function assert(condition, message) {
@@ -228,7 +276,7 @@ await test('a mesh with no normals gets face normals, not black shading', () => 
   }
 });
 
-await test('sharing ratio identifies a mesh that cannot be decimated', () => {
+await bakeTest('sharing ratio identifies a mesh that cannot be decimated', () => {
   // 6 unique vertices, 2 triangles: a soup. Each vertex belongs to exactly one
   // triangle, so the average is 1 — the threshold the LOD chain uses to refuse
   // to pretend it simplified a mesh it could not.
@@ -246,7 +294,7 @@ await test('sharing ratio identifies a mesh that cannot be decimated', () => {
 // The baked asset set
 // ---------------------------------------------------------------------------
 
-await test('every curated model is baked, and every baked model is curated', () => {
+await bakeTest('every curated model is baked, and every baked model is curated', () => {
   assert(SPECS.length >= 20, `expected a real library, got ${SPECS.length} entries`);
   assertEqual(MODEL_IDS.length, SPECS.length, 'the baked set matches the curated list exactly');
   for (const spec of SPECS) {
@@ -261,7 +309,7 @@ await test('every curated model is baked, and every baked model is curated', () 
   }
 });
 
-await test('baked models are real-world scale, upright and plausible', () => {
+await bakeTest('baked models are real-world scale, upright and plausible', () => {
   for (const id of MODEL_IDS) {
     const m = BAKED[id];
     const [w, h, d] = m.bounds.size;
@@ -282,7 +330,7 @@ await test('baked models are real-world scale, upright and plausible', () => {
   }
 });
 
-await test('every baked LOD is complete, finite and correctly sized', () => {
+await bakeTest('every baked LOD is complete, finite and correctly sized', () => {
   for (const id of MODEL_IDS) {
     const m = BAKED[id];
     assert(m.lods.length >= 1, `${id} has no LODs`);
@@ -310,7 +358,7 @@ await test('every baked LOD is complete, finite and correctly sized', () => {
   }
 });
 
-await test('the LOD chain reduces, and a missing simplifier is a loud failure', () => {
+await bakeTest('the LOD chain reduces, and a missing simplifier is a loud failure', () => {
   if (!simplifierReady) {
     // Not a skip-and-pass. If the simplifier cannot load, the LOD chain is
     // three copies of LOD0 and the memory saving is fictional — which is a
@@ -335,7 +383,7 @@ await test('the LOD chain reduces, and a missing simplifier is a loud failure', 
   assertEqual(reduced, checked, 'every model with a chain must actually reduce');
 });
 
-await test('a low-poly model is left alone rather than decimated into noise', () => {
+await bakeTest('a low-poly model is left alone rather than decimated into noise', () => {
   // Decimating a 400-triangle mesh to 50 makes it worse, not cheaper. The chain
   // should be skipped with a warning rather than applied.
   if (!simplifierReady) return;
@@ -364,7 +412,7 @@ const materialFor = (id) => {
   return i;
 };
 
-await test('a room archetype is chosen from the building, and low buildings are skipped', () => {
+await bakeTest('a room archetype is chosen from the building, and low buildings are skipped', () => {
   assertEqual(roomFor({ w: 8, d: 8, height: 3.2 }), null, 'a 3.2 m shed is not furnished');
   assert(roomFor({ w: 8, d: 8, height: 20 }) === ROOM.OFFICE, 'a tower is offices');
   assert(roomFor({ w: 12, d: 12, height: 6, industrial: true }) === ROOM.WORKSHOP, 'an industrial shed is a workshop');
@@ -376,7 +424,7 @@ await test('a room archetype is chosen from the building, and low buildings are 
     'and neither may have gained or lost an archetype');
 });
 
-await test('every archetype has a placement rule for every model it can place', () => {
+await bakeTest('every archetype has a placement rule for every model it can place', () => {
   // A model with no placement rule would be silently skipped, which looks like
   // "the interiors are sparse" rather than like a missing table entry.
   for (const room of Object.values(ROOM)) {
@@ -403,7 +451,7 @@ await test('every archetype has a placement rule for every model it can place', 
     `only ${used.size} of ${SPECS.length} models are ever placed`);
 });
 
-await test('LOD is chosen by distance, and the thresholds are ordered', () => {
+await bakeTest('LOD is chosen by distance, and the thresholds are ordered', () => {
   for (let i = 1; i < LOD_DISTANCE.length; i++) {
     assert(LOD_DISTANCE[i] > LOD_DISTANCE[i - 1], `LOD thresholds must increase, got ${LOD_DISTANCE}`);
   }
@@ -413,7 +461,7 @@ await test('LOD is chosen by distance, and the thresholds are ordered', () => {
   assertEqual(lodForDistance(-5), 0, 'a negative distance is still the finest level');
 });
 
-await test('a built interior is enclosed, furnished, finite and inside its own walls', () => {
+await bakeTest('a built interior is enclosed, furnished, finite and inside its own walls', () => {
   for (const [label, b] of [
     ['residential', { w: 9, d: 9, height: 5 }],
     ['office', { w: 10, d: 10, height: 20 }],
@@ -447,7 +495,7 @@ await test('a built interior is enclosed, furnished, finite and inside its own w
   }
 });
 
-await test('a furnished room is deterministic per building and varies between them', () => {
+await bakeTest('a furnished room is deterministic per building and varies between them', () => {
   const b = { w: 9, d: 9, height: 5 };
   const a1 = buildInterior(b, 0, 0, 0, 4, materialFor, kit);
   const a2 = buildInterior(b, 0, 0, 0, 4, materialFor, kit);
@@ -459,7 +507,7 @@ await test('a furnished room is deterministic per building and varies between th
     'two different buildings must not get the same arrangement');
 });
 
-await test('a distant room uses less geometry than a near one', () => {
+await bakeTest('a distant room uses less geometry than a near one', () => {
   const b = { w: 9, d: 9, height: 5 };
   const near = buildInterior(b, 0, 0, 0, 2, materialFor, kit);
   const far = buildInterior(b, 0, 0, 0, 40, materialFor, kit);
@@ -471,7 +519,7 @@ await test('a distant room uses less geometry than a near one', () => {
     'the same items are placed, just at a coarser level');
 });
 
-await test('a model is dropped onto the floor rather than floating at its origin', () => {
+await bakeTest('a model is dropped onto the floor rather than floating at its origin', () => {
   // Imported meshes are authored around their own origin, which is often not
   // the base of the object. Without the drop, a chair floats at its bounding
   // box centre or sinks by half its depth.
@@ -499,4 +547,7 @@ for (const t of results) {
   }
 }
 console.log(`${results.length - failures}/${results.length} model tests passed, ${totalChecks} assertions`);
+if (skippedForBake) {
+  console.log(`${skippedForBake} test(s) skipped: run \`npm run assets:models\` to exercise the bake`);
+}
 process.exit(failures ? 1 : 0);

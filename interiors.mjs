@@ -30,7 +30,7 @@
  * on. Stated rather than quietly omitted: if interiors ever become enterable,
  * this is the thing that has to change.
  */
-import { MODELS, ROOM, FLOATS_PER_VERTEX, lodVertices } from './assets/models.gen.mjs';
+import { MODELS, ROOM, FLOATS_PER_VERTEX, lodVertices } from './assets/models.index.mjs';
 
 /** Vertex layout, mirrored from geometry.mjs. */
 const OFF_POS = 0, OFF_NRM = 3, OFF_COL = 6, OFF_MAT = 9, OFF_UV = 10;

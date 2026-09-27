@@ -45,6 +45,11 @@ assets/.cache/
 # loaded rather than imported, this line has to go.
 assets/models.gen.mjs
 
+# The build stages here and swaps into dist/ only on success, so a failed build
+# cannot destroy a working artifact. Transient, but a killed build can leave one.
+.dist-staging/
+.dist-previous/
+
 # `npm run assets:textures`. The 26 baked CC0 materials as the native material
 # table, and the three packed KTX2 maps under build/. The source PNGs in
 # assets/textures are committed, exactly as for the models; this is the
