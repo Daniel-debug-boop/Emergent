@@ -26,10 +26,10 @@ jobs:
       - name: Syntax check
         run: npm run check
 
-      # Runs the world, math, culling, physics, project, tooling and runtime
-      # suites. The physics suite executes the real Rapier engine and the
-      # runtime suite executes the real game frame loop against a validating
-      # WebGL2 surface, so no GPU or browser is required in CI.
+      # Runs the world, math, culling, missions, physics, input, project,
+      # tooling and runtime suites. The physics suite executes the real Rapier
+      # engine and the runtime suite executes the real game frame loop against
+      # a validating WebGL2 surface, so no GPU or browser is required in CI.
       - name: Test
         run: npm test
 
@@ -41,7 +41,7 @@ jobs:
       # here and 404 on the player's first frame.
       - name: Verify build output
         run: |
-          test -s dist/index.html -a -s dist/game3d.js -a -s dist/physics.mjs
+          test -s dist/index.html -a -s dist/game3d.js -a -s dist/physics.mjs -a -s dist/input.mjs
           test -s dist/vendor/rapier.mjs
           cmp dist/vendor/rapier.mjs node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs
           echo "vendored rapier is byte-identical to the tested dependency"

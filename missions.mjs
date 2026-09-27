@@ -111,6 +111,102 @@ export const ARCHETYPES = {
 export const ARCHETYPE_IDS = Object.keys(ARCHETYPES);
 
 /**
+ * How a business is presented on a stage.
+ * @typedef {{x:number, z:number, businessId:number, label:string, stock?:number}} StageTarget
+ */
+
+/**
+ * Which jobs the world can currently support.
+ *
+ * Availability is world state, not a property of the archetype table: a
+ * delivery needs a business with surplus *and* one that is short, a restock
+ * needs a business that has run down, a survey needs somewhere to walk and a
+ * response needs a live incident. A job that could not be completed is not
+ * offered, which is the difference between "a job appeared" and "a job appeared
+ * that could be finished".
+ *
+ * The thresholds are relative to the distribution the world generator produces
+ * rather than absolute numbers it may never reach. An absolute threshold that
+ * nothing satisfies does not create variety, it silently deletes job types.
+ */
+export function jobAvailability(pool) {
+  return {
+    delivery: pool.stocked.length > 0 && pool.short.length > 0,
+    restock: pool.short.length > 0,
+    survey: pool.districts.length > 0,
+    respond: pool.incidents.length > 0
+  };
+}
+
+/**
+ * Resolve one stage template into a concrete place to go.
+ *
+ * The seam between the world and the rules: the rules know what "interact at
+ * this position" means and nothing about businesses. Returning null drops the
+ * stage, which is how a delivery with no valid target degrades into a shorter
+ * job rather than a broken one.
+ *
+ * @param {object} template A stage template from an archetype.
+ * @param {string} archetype Archetype id, for wording.
+ * @param {object} pool {stocked, short, districts, incidents, awayFrom}
+ * @param {() => number} rand
+ * @returns {StageTarget|null}
+ */
+export function resolveStage(template, archetype, pool, rand) {
+  const take = list => (list && list.length ? list[Math.floor(rand() * list.length) % list.length] : null);
+  if (template.role === 'source' || template.role === 'target') {
+    const business = take(template.role === 'source' ? pool.stocked : pool.short);
+    if (!business || !Number.isFinite(business.x)) return null;
+    return {
+      x: business.x, z: business.z, businessId: business.id, stock: business.stock,
+      label: `${template.label} — ${business.type || 'business'}`
+    };
+  }
+  if (template.role === 'waypoint') {
+    // Somewhere to walk that is not where the player already is, so a survey
+    // circuit is a circuit and not a walk to the doorstep. The farthest of a
+    // handful of samples is used rather than a single random one, so a survey
+    // reliably takes the player somewhere new.
+    const awayFrom = pool.awayFrom || { x: 0, z: 0 };
+    let best = null, bestScore = -1;
+    for (let i = 0; i < 8; i++) {
+      const d = take(pool.districts);
+      if (!d) return null;
+      const score = Math.hypot(d.x - awayFrom.x, d.z - awayFrom.z);
+      if (score > bestScore) { bestScore = score; best = d; }
+    }
+    if (!best || bestScore < 1) return null;
+    return { x: best.x, z: best.z, label: `Reach the ${best.type || 'district'} survey point` };
+  }
+  if (template.role === 'event') {
+    const e = take(pool.incidents);
+    if (!e) return null;
+    return { x: e.x, z: e.z, label: archetype === 'respond' ? 'Reach the incident' : 'Hold the scene' };
+  }
+  return null;
+}
+
+/**
+ * Choose and build the next job from what the world can currently support.
+ *
+ * @param {object} spec
+ * @param {object} spec.pool {stocked, short, districts, incidents, awayFrom}
+ * @param {number} [spec.rank]
+ * @param {() => number} rand
+ * @returns {object|null} A mission, or null when the world supports no job.
+ */
+export function createJob(spec) {
+  const { pool, rand } = spec;
+  const archetype = pickArchetype(jobAvailability(pool), rand);
+  if (!archetype) return null;
+  return buildMission({
+    archetype,
+    rank: spec.rank || 1,
+    resolve: template => resolveStage(template, archetype, pool, rand)
+  });
+}
+
+/**
  * Build a concrete mission from an archetype and a set of resolved roles.
  *
  * @param {object} spec

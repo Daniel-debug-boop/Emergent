@@ -338,7 +338,7 @@ function makeElement(tag) {
     removeEventListener() {},
     setPointerCapture() {},
     releasePointerCapture() {},
-    requestPointerLock() {},
+    requestPointerLock() { if (this._owner) { this._owner.pointerLockElement = this; this._owner.dispatch('pointerlockchange'); } },
     focus() {},
     click() { for (const fn of this.listeners.click || []) fn({ preventDefault() {} }); },
     getContext(type) {
@@ -423,25 +423,44 @@ export function setupHeadless(options = {}) {
 
   const location = new URL(url);
   const elements = new Map();
+  const created = [];
   const document = {
     body: makeElement('body'),
     pointerLockElement: null,
-    exitPointerLock() { this.pointerLockElement = null; },
+    exitPointerLock() { this.pointerLockElement = null; this.dispatch('pointerlockchange'); },
     getElementById(id) {
       if (!elements.has(id)) {
         const el = makeElement('div');
         el.id = id;
+        el._owner = document;
         elements.set(id, el);
       }
       return elements.get(id);
     },
     createElement(tag) {
       const el = makeElement(tag);
+      el._owner = document;
+      created.push(el);
       if (el.id) elements.set(el.id, el);
       return el;
     },
+    /** First created element matching a tag name or `#id`. */
+    querySelector(selector) {
+      const id = selector.startsWith('#') ? selector.slice(1) : null;
+      return created.find(el => (id ? el.id === id : el.tagName === selector.toUpperCase())) || null;
+    },
     addEventListener(type, fn) { (globalListeners[type] ||= []).push(fn); },
-    removeEventListener() {}
+    removeEventListener() {},
+    /**
+     * Fire a window-level event.
+     *
+     * Pointer lock is the reason this exists: in a browser the request is
+     * answered asynchronously by the user agent and the page only learns about
+     * it through this event. Modelling the request as a no-op left
+     * `document.pointerLockElement` permanently null, so mouse look — the one
+     * control that has no fallback binding at all — could not be exercised.
+     */
+    dispatch(type, event = {}) { fireGlobal(type, { target: document, ...event }); }
   };
   globalThis.window = globalThis;
   globalThis.document = document;
@@ -467,10 +486,33 @@ export function setupHeadless(options = {}) {
   return { document, location };
 }
 
-/** Dispatch a synthetic window-level event to the game (e.g. keydown). */
+/**
+ * Dispatch a synthetic window-level event to the game (e.g. keydown).
+ *
+ * Modelled on the parts of `Event` a listener is entitled to call. A plain
+ * object was enough until the game started using `stopImmediatePropagation` to
+ * own keyboard input, at which point the harness threw a TypeError instead of
+ * telling anyone the real thing was missing — the failure mode this harness
+ * exists to prevent, in the harness itself.
+ */
 export function fireGlobal(type, event = {}) {
+  // A real dispatch stops handing the event to later listeners once one calls
+  // `stopImmediatePropagation`. Without that, two handlers for one key press
+  // both run here while only one of them would run in a browser — which is
+  // exactly the class of bug the harness is supposed to catch.
+  const state = { stopped: false };
+  const evt = {
+    preventDefault() {},
+    stopPropagation() { state.stopped = true; },
+    stopImmediatePropagation() { state.stopped = true; },
+    target: globalThis,
+    type,
+    repeat: false,
+    ...event
+  };
   for (const fn of globalListeners[type] || []) {
-    fn({ preventDefault() {}, repeat: false, ...event });
+    fn(evt);
+    if (state.stopped) break;
   }
 }
 

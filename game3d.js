@@ -7,9 +7,13 @@ import {
   surfaceHeightAt, DEFAULT_TUNING
 } from './physics.mjs';
 import {
-  ARCHETYPE_IDS, buildMission, currentStage, advanceMission, objectiveText,
-  pickArchetype, stageDistance
+  currentStage, advanceMission, objectiveText, stageDistance, createJob
 } from './missions.mjs';
+import {
+  createInput, isDown, wasPressed, moveAxes, endFrame, addMouseDelta, setKey,
+  isCapturing, setTouchStick, setButton, setStick, deserialiseBindings,
+  serialiseBindings
+} from './input.mjs';
 
 'use strict';
 
@@ -125,10 +129,91 @@ let firstPerson = false;
 let yaw = Math.PI;
 let pitch = -0.24;
 let pointerLocked = false;
-let keys = Object.create(null);
+/**
+ * Input state.
+ *
+ * Registered before the legacy listener further down this file, which is why
+ * the handlers below call `stopImmediatePropagation`: two handlers for one
+ * event is how a key press ends up firing an action twice, once from the
+ * binding table and once from a hard-coded `if (k === 'e')`. The legacy handler
+ * is dead code kept only until this file's tail is next edited; nothing reaches
+ * it.
+ */
+const input = createInput();
+
+/** One place that turns a press into an effect. */
+function dispatchInputActions(){
+  // Touch and the on-screen RUN button are not keyboard events, so they are
+  // folded into the same action state rather than being special-cased at every
+  // call site.
+  setTouchStick(input,touchMove.x,-touchMove.y,(touchMove.x!==0||touchMove.y!==0));
+  pollGamepad();
+  if(input.mouse.dx||input.mouse.dy){
+    yaw-=input.mouse.dx*0.0023;
+    pitch=clamp(pitch-input.mouse.dy*0.0020,-1.05,0.35);
+  }
+  if(wasPressed(input,'interact'))interact();
+  if(wasPressed(input,'toggleRenderer'))cycleRenderer();
+  if(wasPressed(input,'toggleQuality'))cycleQuality();
+  if(wasPressed(input,'toggleCamera')){firstPerson=!firstPerson;showToast(firstPerson?'First-person camera':'Third-person camera');}
+  if(wasPressed(input,'toggleTelemetry')){debugVisible=!debugVisible;$('debug').classList.toggle('show',debugVisible);}
+  if(wasPressed(input,'save'))saveGame();
+  if(wasPressed(input,'load')){if(loadGame()){buildWorldIndex();streamKey='';showToast('Game loaded.');}}
+  if(wasPressed(input,'newWorld'))newWorld();
+  if(wasPressed(input,'releasePointer')&&document.pointerLockElement===canvas)document.exitPointerLock?.();
+}
+
+/**
+ * Read the first connected gamepad, if there is one.
+ *
+ * Polled rather than event-driven because the Gamepad API only exposes state,
+ * never events: there is no "button pressed" to subscribe to. A disconnected
+ * pad is simply not polled, and its held actions are released so the player does
+ * not keep walking after unplugging it.
+ */
+function pollGamepad(){
+  const pads=typeof navigator!=='undefined'&&navigator.getGamepads?navigator.getGamepads():null;
+  if(!pads)return;
+  let pad=null;
+  for(const p of pads)if(p&&p.connected){pad=p;break;}
+  if(!pad){
+    for(const action of input.down)if(['jump','interact','sprint'].includes(action))input.down.delete(action);
+    input.stick.x=0;input.stick.y=0;
+    return;
+  }
+  setStick(input,pad.axes[0]||0,pad.axes[1]||0);
+  const buttons=pad.buttons||[];
+  for(let i=0;i<buttons.length;i++)setButton(input,i,!!(buttons[i]&&buttons[i].pressed));
+}
+
 let touchMove = { x: 0, y: 0 };
 let touchSprint = false;
-let inputLocked = true;
+
+// Keyboard and mouse, bound before the legacy handlers at the end of this file
+// so that those never see an event. See the note on `input` above.
+/**
+ * `KeyboardEvent.code` for the keys a fallback is worth having.
+ *
+ * `code` is the physical key and is what bindings are written against, because
+ * `key` is whatever character the layout produces. Every real keyboard event
+ * carries it. Synthetic events, some remote-desktop bridges and some assistive
+ * tools do not, and a game that silently stops responding to those is worse
+ * than one that guesses: this covers the movement cluster and nothing else, so
+ * an unknown key is ignored rather than mis-bound.
+ */
+const KEY_CODE_FALLBACK={'w':'KeyW','a':'KeyA','s':'KeyS','d':'KeyD','e':'KeyE','q':'KeyQ','t':'KeyT','v':'KeyV','n':'KeyN',' ':'Space','arrowup':'ArrowUp','arrowdown':'ArrowDown','arrowleft':'ArrowLeft','arrowright':'ArrowRight','shift':'ShiftLeft','escape':'Escape','enter':'Enter'};
+const eventCode=e=>e.code||KEY_CODE_FALLBACK[String(e.key||'').toLowerCase()]||'';
+
+addEventListener('keydown',e=>{
+  setKey(input,eventCode(e),true);
+  initializeAudio();
+  // Space and the arrows scroll the page out from under the player.
+  const code=eventCode(e);
+  if(isCapturing(input)||code==='Space'||code.startsWith('Arrow'))e.preventDefault();
+  e.stopImmediatePropagation();
+});
+addEventListener('keyup',e=>{setKey(input,eventCode(e),false);e.stopImmediatePropagation();});
+addEventListener('mousemove',e=>{if(pointerLocked)addMouseDelta(input,e.movementX||0,e.movementY||0);});
 // Camera heights, measured from the player's feet. The pre-physics code kept the
 // body 0.55 above the terrain and hung the camera a further 1.55 (first person)
 // or 4.8 (chase) above that; these reproduce exactly the same framing now that
@@ -696,40 +781,29 @@ function drawMissionMarker(){
 }
 
 /**
- * How far away an NPC or car has to be before it stops being solid.
+ * How far away an NPC or car has to be before it stops being solid, and how
+ * many get a body at once.
  *
- * This is a reachability bound, not a quality setting: nothing beyond it can be
- * touched, so a collider out there costs solver time and buys nothing. It is
- * also generous — a sprinting player closes 300 units a second, so an agent at
- * the edge is still three quarters of a second away.
+ * The radius is a reachability bound rather than a quality setting: nothing
+ * beyond it can be touched, so a collider out there costs solver time and buys
+ * nothing. The budget exists because the crowd near a district centre is not a
+ * bounded number; taking the nearest first means the solver's time goes to the
+ * agents the player could collide with this frame.
  */
 const AGENT_COLLIDER_RADIUS = 260;
-/**
- * Hard cap on kinematic agent bodies.
- *
- * Every agent inside the radius wants a body, and the crowd is dense enough
- * near a district centre that "everything in range" is not a bounded number.
- * Taking the nearest first means the budget is spent on the agents the player
- * could actually collide with this frame, and the ones that fall off the end
- * are the ones already out of reach.
- */
 const AGENT_COLLIDER_BUDGET = 64;
 
 /**
  * Give the nearby crowd and traffic real collision bodies.
  *
- * Before this, the player walked through everyone: NPCs had no colliders at
- * all, and cars drove through the player and each other. Bodies are kinematic
- * rather than dynamic on purpose — NPCs follow scripted goals and cars follow
- * lanes, so simulating them with forces would produce a slower and less
- * controllable simulation, and a crowd that shoved the player around is a
- * worse game than a crowd the player has to walk around.
- *
- * Synced every frame as a set, keyed by entity, so an agent that leaves the
- * radius has its body removed and one that enters gets one created. The
- * positions are one frame behind the simulation that drives them, which for a
- * body the player closes on at 300 units a second is well inside a frame of
- * travel.
+ * Kinematic rather than dynamic on purpose: NPCs follow scripted goals and cars
+ * follow lanes, so simulating them with forces would be slower, less
+ * controllable, and would give a crowd that shoves the player around rather
+ * than one to walk around. Synced every frame as a set, keyed by entity, so an
+ * agent that leaves the radius has its body removed and one that enters gets
+ * one created. The positions are one frame behind the simulation that drives
+ * them, which for a body the player closes on at 300 units a second is well
+ * inside a frame of travel.
  */
 function syncAgentColliders(){
   if(!physics)return;
@@ -899,64 +973,31 @@ function discoverDistricts(){
  * offered, which is the difference between "a delivery appeared" and "a job
  * appeared that could be finished".
  */
+/**
+ * Choose and build the next job from what the world can currently support.
+ *
+ * All of the decision — which archetypes are possible, how a template becomes
+ * a place, whether a target is even valid — lives in `missions.mjs`. This only
+ * gathers the world state it needs and hands it over, so the rules are testable
+ * without a city and the game has no opinion about job types.
+ */
 function chooseMission(){
+  const asTarget=b=>{const bl=missionBuilding(b.id);return bl?{...bl,id:b.id,type:b.type,stock:b.stock}:null;};
   // Shortage thresholds are relative to the distribution the generator
   // produces (18..100 at birth) rather than absolute numbers the world may
   // never reach. An absolute threshold that nothing satisfies does not create
-  // variety, it silently deletes two thirds of the job types.
-  const stocked=world.businesses.filter(b=>b.open&&b.stock>45);
-  const short=world.businesses.filter(b=>!b.open||b.stock<26);
-  const incidents=world.events.filter(e=>e.life>0&&e.severity>=0.2&&Number.isFinite(e.x)&&Number.isFinite(e.z));
-  const availability={
-    delivery:stocked.length>0&&short.length>0,
-    restock:short.length>0,
-    survey:world.districts.length>0,
-    respond:incidents.length>0
-  };
-  const archetype=pickArchetype(availability,rand);
-  if(!archetype)return;
-  currentMission=buildMission({
-    archetype,rank:player.rank,
-    resolve:(template)=>resolveMissionStage(template,archetype,{stocked,short,incidents})
+  // variety, it silently deletes job types.
+  currentMission=createJob({
+    rank:player.rank,rand,
+    pool:{
+      stocked:world.businesses.filter(b=>b.open&&b.stock>45).map(asTarget).filter(Boolean),
+      short:world.businesses.filter(b=>!b.open||b.stock<26).map(asTarget).filter(Boolean),
+      districts:world.districts,
+      incidents:world.events.filter(e=>e.life>0&&e.severity>=0.2&&Number.isFinite(e.x)&&Number.isFinite(e.z)),
+      awayFrom:player
+    }
   });
   if(currentMission)missionTimer=45;
-}
-
-/**
- * Turn a stage template into a concrete stage with a real place to go.
- *
- * This is the seam between the world and the mission rules: the rules know
- * what "interact at this position" means, and nothing about businesses.
- */
-function resolveMissionStage(template,archetype,pool){
-  const building=b=>{const bl=missionBuilding(b.id);return bl||null;};
-  if(template.role==='source'){
-    const b=pool.stocked[Math.floor(rand()*pool.stocked.length)];if(!b)return null;
-    const bl=building(b);if(!bl)return null;
-    return {x:bl.x,z:bl.z,businessId:b.id,label:`Collect ${template.label.toLowerCase()} from ${b.type}`};
-  }
-  if(template.role==='target'){
-    const b=pool.short[Math.floor(rand()*pool.short.length)];if(!b)return null;
-    const bl=building(b);if(!bl)return null;
-    return {x:bl.x,z:bl.z,businessId:b.id,label:`${template.label} at ${b.type}`,stock:b.stock};
-  }
-  if(template.role==='waypoint'){
-    // Somewhere to walk that is not where the player already is, so a survey
-    // circuit is a circuit and not a walk to the doorstep.
-    let best=null,bestScore=0;
-    for(let i=0;i<12;i++){
-      const d=world.districts[Math.floor(rand()*world.districts.length)];if(!d)continue;
-      const dist=Math.hypot(d.x-player.x,d.z-player.z);
-      if(dist>bestScore){bestScore=dist;best=d;}
-    }
-    if(!best)return null;
-    return {x:best.x,z:best.z,label:`Reach the ${best.type} survey point`};
-  }
-  if(template.role==='event'){
-    const e=pool.incidents[Math.floor(rand()*pool.incidents.length)];if(!e)return null;
-    return {x:e.x,z:e.z,label:archetype==='respond'?'Reach the incident':'Hold the scene'};
-  }
-  return null;
 }
 
 /**
@@ -1104,10 +1145,18 @@ function completeMission(){
 }
 
 function updatePlayer(dt){
-  let ix=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0)+touchMove.x;
-  let iz=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0)+touchMove.y;
-  const len=Math.hypot(ix,iz)||1;if(ix||iz){ix/=len;iz/=len;}
-  const sprint=keys.shift||touchSprint;
+  // Movement comes from the action layer, so keyboard, gamepad stick and touch
+  // stick are one input rather than three special cases in this function.
+  // `moveAxes` reports a screen-relative vector: +y is up, the direction the
+  // player is asking to go. EMERGENT's heading convention is that walking
+  // forward travels along -[sin(yaw), cos(yaw)] — it has been that way since the
+  // first build, so it is not something to change silently here. The two signs
+  // therefore disagree, and the disagreement is resolved once, at the point
+  // where world axes first exist. The input module must not be told about world
+  // axes: it is device-agnostic and is meant to stay that way.
+  const axes=moveAxes(input);
+  const ix=axes.x, iz=-axes.y;
+  const sprint=isDown(input,'sprint')||touchSprint;
   let speed=sprint?DEFAULT_TUNING.sprintSpeed:DEFAULT_TUNING.walkSpeed;
   if(player.energy<18)speed*=0.62;
   if(world.weather===2)speed*=0.92;
@@ -1121,7 +1170,7 @@ function updatePlayer(dt){
   // change with the frame rate, which is the single most common way a character
   // controller ends up feeling broken on someone else's machine. The rendered
   // frame time decides how many fixed steps to run, not how big each one is.
-  const jump=!!(keys[' ']||keys.space);
+  const jump=wasPressed(input,'jump');
   // The simulation is the authority on where the player is, and `player` is
   // written from its result every step, so any disagreement means something
   // outside the movement path moved the player: a loaded save, a new world, or
@@ -1149,8 +1198,8 @@ function updatePlayer(dt){
   // A long stall (a tab regaining focus, a blocking call) must not be repaid
   // with dozens of catch-up steps; dropping the backlog is the lesser evil.
   if(steps>=MAX_PHYSICS_STEPS)physicsAccumulator=0;
-  player.speed=(ix||iz)?speed:0;
-  player.energy=clamp(player.energy+(ix||iz?-(sprint?5.2:2.1):4.5)*dt,0,100);
+  player.speed=axes.magnitude>0.01?speed*axes.magnitude:0;
+  player.energy=clamp(player.energy+(axes.magnitude>0.01?-(sprint?5.2:2.1):4.5)*dt,0,100);
   discoverDistricts();
 }
 
@@ -1180,6 +1229,7 @@ function updateSimulation(dt){
   world.time=(world.time+dt*0.04)%24;
   weatherTimer-=dt;if(weatherTimer<=0){world.weather=(world.weather+1+Math.floor(rand()*2))%3;weatherTimer=55+rand()*95;showToast(`Weather changed: ${['clear skies','mist','rain'][world.weather]}.`);}
   eventTimer=Math.max(0,eventTimer-dt);
+  dispatchInputActions();
   updatePlayer(dt);
   // NPC simulation LOD: near agents run continuously, medium/far agents tick less often,
   // and very-far agents only contribute aggregate state. This keeps the world evolving
@@ -1208,11 +1258,18 @@ function updateSimulation(dt){
   eventMaintenance(dt);
   saveTimer-=dt;if(saveTimer<=0){saveGame();saveTimer=8;}
   if(audioNodes){audioNodes.noiseGain.gain.value=world.weather===2?0.018:world.weather===1?0.010:0.004;}
+  // Press and release edges last exactly one frame, so every consumer has
+  // read them before they are cleared.
+  endFrame(input);
+  // The test surface is assembled at the end of this file, so the input
+  // state is attached to it on the first frame rather than being wired into
+  // a literal that has not been evaluated yet.
+  if(globalThis.EMERGENT&&!globalThis.EMERGENT.input)globalThis.EMERGENT.input=input;
 }
 
 function saveGame(){
   if(!world||!player)return;
-  const payload={version:3,seed,time:world.time,weather:world.weather,economy:world.economy,heat:world.heat,discovered:world.discovered,events:world.events.slice(-30),player:{x:player.x,z:player.z,money:player.money,energy:player.energy,discoveries:player.discoveries,missionsCompleted:player.missionsCompleted,rank:player.rank},mission:currentMission,businesses:world.businesses.map(b=>({id:b.id,stock:b.stock,price:b.price,open:b.open,customers:b.customers,revenue:b.revenue,reputation:b.reputation})),npcs:world.npcs.map(n=>({id:n.id,x:n.x,z:n.z,energy:n.energy,money:n.money,mood:n.mood,state:n.state,activity:n.activity,memory:n.memory.slice(-6)}))};
+  const payload={version:3,seed,time:world.time,weather:world.weather,economy:world.economy,heat:world.heat,discovered:world.discovered,events:world.events.slice(-30),player:{x:player.x,z:player.z,money:player.money,energy:player.energy,discoveries:player.discoveries,missionsCompleted:player.missionsCompleted,rank:player.rank},mission:currentMission,bindings:serialiseBindings(input),sensitivity:input.sensitivity,invertY:input.invertY,businesses:world.businesses.map(b=>({id:b.id,stock:b.stock,price:b.price,open:b.open,customers:b.customers,revenue:b.revenue,reputation:b.reputation})),npcs:world.npcs.map(n=>({id:n.id,x:n.x,z:n.z,energy:n.energy,money:n.money,mood:n.mood,state:n.state,activity:n.activity,memory:n.memory.slice(-6)}))};
   try{localStorage.setItem(SAVE_KEY,JSON.stringify(payload));$('saveState').textContent='Saved';}catch(e){$('saveState').textContent='Save unavailable';}
 }
 
@@ -1223,7 +1280,11 @@ function loadGame(){
     if(s.player)Object.assign(player,s.player);
     if(s.businesses) for(const saved of s.businesses){const b=world.businesses.find(x=>x.id===saved.id);if(b)Object.assign(b,saved);}
     if(s.npcs) for(const saved of s.npcs){const n=world.npcs.find(x=>x.id===saved.id);if(n)Object.assign(n,saved);}
-    currentMission=s.mission||null;showToast('Saved world restored.');return true;
+    currentMission=s.mission||null;
+    if(s.bindings)deserialiseBindings(input,s.bindings);
+    if(Number.isFinite(s.sensitivity))input.sensitivity=s.sensitivity;
+    if(typeof s.invertY==='boolean')input.invertY=s.invertY;
+    showToast('Saved world restored.');return true;
   }catch(e){return false;}
 }
 
@@ -1241,7 +1302,7 @@ function startGame(load=true){
   const chosen=load ? (stored?.seed??WORLD_SEED_DEFAULT) : (Number.isFinite(BENCH_SEED)&&BENCH_SEED>0 ? BENCH_SEED : WORLD_SEED_DEFAULT); seed=chosen>>>0;rand=rng(seed);world=generateWorld(seed);
   player={x:4800,z:4800,y:terrainHeight(4800,4800,seed),money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1,grounded:true};
   buildWorldIndex();if(load) loadGame();buildWorldIndex();streamResidency.active.clear();streamResidency.chunks.clear();colliderCache.clear();physicsAccumulator=0;buildStaticScene();syncPlayerToPhysics();buildDynamicScene(true);
-  gameRunning=true;inputLocked=false;last=performance.now();requestAnimationFrame(frame);showToast('Explore, find businesses and complete the delivery route.');
+  gameRunning=true;last=performance.now();requestAnimationFrame(frame);showToast('Explore, find businesses and complete the delivery route.');
 }
 
 function updateHUD(){
@@ -1311,22 +1372,8 @@ function bindTouch(){
   $('touchInteract').addEventListener('pointerdown',()=>interact());
 }
 
-addEventListener('keydown',e=>{
-  const k=e.key.toLowerCase();keys[k]=true;initializeAudio();
-  if(k==='e')interact();
-  if(k==='t')cycleRenderer();
-  if(k==='q')cycleQuality();
-  if(k==='v'){firstPerson=!firstPerson;showToast(firstPerson?'First-person camera':'Third-person camera');}
-  if(k==='f2')saveGame();
-  if(k==='f3'){if(loadGame()){buildWorldIndex();streamKey='';showToast('Game loaded.');}}
-  if(k==='d'){debugVisible=!debugVisible;$('debug').classList.toggle('show',debugVisible);}
-  if(k==='n'){newWorld();}
-  if(k==='escape' && document.pointerLockElement===canvas)document.exitPointerLock?.();
-});
-addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 canvas.addEventListener('click',()=>{initializeAudio();canvas.requestPointerLock?.();});
-addEventListener('pointerlockchange',()=>{pointerLocked=document.pointerLockElement===canvas;inputLocked=!pointerLocked;});
-addEventListener('mousemove',e=>{if(pointerLocked){yaw-=e.movementX*0.0023;pitch=clamp(pitch-e.movementY*0.0020,-1.05,0.35);}});
+addEventListener('pointerlockchange',()=>{pointerLocked=document.pointerLockElement===canvas;});
 $('saveBtn').addEventListener('click',()=>{saveGame();beep(520,0.08);});
 $('loadBtn').addEventListener('click',()=>{if(loadGame()){buildWorldIndex();streamKey='';showToast('Game loaded.');beep(620,0.08);}else showToast('No saved world found for this seed.');});
 $('newBtn').addEventListener('click',()=>newWorld());
@@ -1366,6 +1413,16 @@ globalThis.EMERGENT = {
   get streamRadius() {
     return qualityLevel === 0 ? 680 : qualityLevel === 1 ? 800 : qualityLevel === 2 ? 980 : 1160;
   },
+  /**
+   * The live input state, including its binding table.
+   *
+   * Exposed because "the controls are data, not hard-coded key checks" is only
+   * checkable from outside if a test can read a binding and write a new one.
+   * Rebinding through this object is the real code path a controls screen uses.
+   */
+  get input() { return input; },
+  /** Camera state, so mouse look can be asserted without reading the matrix. */
+  get view() { return { yaw, pitch, pointerLocked, firstPerson }; },
   /** Move the player instantly to a world position (tests / manual QA). */
   teleport(x, z) {
     player.x = x; player.z = z;

@@ -12,6 +12,7 @@
 import {
   setupHeadless, resetHarness, fireGlobal, pumpFrames, currentGL, overlayCtxOf
 } from './tools/headless_runtime.mjs';
+import { beginRebind, isCapturing } from './input.mjs';
 
 // ---------------------------------------------------------------------------
 // Minimal test runner (no dependencies; the project ships no test framework)
@@ -189,6 +190,176 @@ await test('survives a long run without NaN geometry or lost frames', async () =
   }
 });
 
+await test('the action-based input layer drives movement, look and interaction', async () => {
+  // End-to-end through the real game: synthetic DOM events in, a walking,
+  // sprinting, looking, interacting character out. The unit suite proves the
+  // action layer maps codes to actions; this proves the game reads *only* that
+  // layer, which a unit test cannot show. Every press here uses `code`, as a
+  // real browser sends, so a binding keyed on `key` could not pass by accident.
+  const { gl, doc } = await boot({ frames: 12 });
+  const game = globalThis.EMERGENT;
+  const input = game.input;
+  assert(input, 'the game exposes its input state');
+  for (const action of ['forward', 'back', 'left', 'right', 'sprint', 'interact', 'toggleRenderer']) {
+    assert(input.bindings[action] && input.bindings[action].length,
+      `the live binding table has a default for ${action}`);
+  }
+
+  // Face east and level the camera, so "forward" is unambiguously +x and the
+  // camera pitch cannot leak into the movement direction.
+  const hold = async (code, frames) => {
+    fireGlobal('keydown', { code, key: code === 'KeyW' ? 'w' : undefined });
+    await pumpFrames(frames);
+    fireGlobal('keyup', { code });
+    await pumpFrames(2);
+  };
+  const walk = async (code) => {
+    game.look(-Math.PI / 2, 0);
+    game.teleport(game.player.x, game.player.z);
+    await pumpFrames(6);
+    const from = { x: game.player.x, z: game.player.z };
+    await hold(code, 40);
+    return { x: game.player.x - from.x, z: game.player.z - from.z };
+  };
+
+  // --- W and S are opposites along the camera's forward axis. ---------------
+  const fwd = await walk('KeyW');
+  assert(fwd.x > 1, `W walks the way the camera faces (dx=${fwd.x.toFixed(2)})`);
+  assert(Math.abs(fwd.z) < 0.5, `and does not drift sideways (dz=${fwd.z.toFixed(2)})`);
+  const back = await walk('KeyS');
+  assert(back.x < -1, `S walks backwards (dx=${back.x.toFixed(2)})`);
+
+  // --- A and D strafe, and neither is also some other action. --------------
+  // Facing +x, the strafe axis is z, and the two must be exact opposites. Which
+  // way counts as "right" is the game's own convention and is not what is being
+  // tested here; what matters is that the two are distinct and opposed.
+  const right = await walk('KeyD');
+  assert(Math.abs(right.x) < 0.5, `D strafes rather than walking forward (dx=${right.x.toFixed(2)})`);
+  assert(Math.abs(right.z) > 1, `D moves along the strafe axis (dz=${right.z.toFixed(2)})`);
+  const left = await walk('KeyA');
+  assert(Math.abs(left.x) < 0.5, `A strafes rather than walking forward (dx=${left.x.toFixed(2)})`);
+  assert(left.z * right.z < 0 && Math.abs(Math.abs(left.z) - Math.abs(right.z)) < 1,
+    `A and D are opposite strafe directions (A dz=${left.z.toFixed(2)}, D dz=${right.z.toFixed(2)})`);
+
+  // EMERGENT's first release bound the telemetry overlay to D as well, so
+  // strafing right opened the debug HUD underneath the player. The binding
+  // table now keeps them apart; this is the regression guard.
+  const debugShown = () => {
+    const el = doc.getElementById('debug');
+    return !!(el && el.classList.contains('show'));
+  };
+  assert(debugShown() === false, 'the telemetry overlay starts hidden');
+  await walk('KeyD');
+  assert(debugShown() === false, 'strafing right must not open the telemetry overlay');
+
+  // --- Shift sprints, and releasing it walks again. -------------------------
+  game.look(-Math.PI / 2, 0);
+  const sprintStart = { x: game.player.x, z: game.player.z };
+  fireGlobal('keydown', { code: 'KeyW' });
+  await pumpFrames(10);
+  fireGlobal('keydown', { code: 'ShiftLeft', key: 'Shift' });
+  await pumpFrames(30);
+  const sprintSpeed = game.player.speed;
+  const sprintDist = game.player.x - sprintStart.x;
+  fireGlobal('keyup', { code: 'ShiftLeft' });
+  await pumpFrames(20);
+  const walkSpeed = game.player.speed;
+  fireGlobal('keyup', { code: 'KeyW' });
+  await pumpFrames(2);
+  assert(sprintSpeed > walkSpeed * 1.2, `shift sprints (${sprintSpeed.toFixed(0)} vs ${walkSpeed.toFixed(0)} u/s)`);
+  assert(sprintDist > 2, `and the character actually covered ground (${sprintDist.toFixed(1)}m)`);
+
+  // --- Mouse look turns the camera, and only while the pointer is locked. --
+  game.look(0, 0);
+  fireGlobal('mousemove', { movementX: 100, movementY: 50 });
+  await pumpFrames(2);
+  assert(game.view.yaw === 0, 'mouse movement must be ignored while the pointer is unlocked');
+  const canvas = doc.querySelector('canvas');
+  assert(canvas, 'the harness exposes the game canvas');
+  canvas.click();
+  assert(game.view.pointerLocked === true, 'clicking the canvas takes the pointer');
+  fireGlobal('mousemove', { movementX: 100, movementY: 50 });
+  await pumpFrames(2);
+  assertClose(game.view.yaw, -0.23, 0.01, 'moving the mouse right yaws the camera left');
+  assertClose(game.view.pitch, -0.10, 0.01, 'and moving it up pitches the camera up');
+  // And the heading it produced is the one the character walks along. W travels
+  // along -[sin(yaw), cos(yaw)], which is EMERGENT's long-standing heading
+  // convention: the vector above is where the camera looks *from*, and the test
+  // asserts against the formula rather than a hand-picked sign so that it keeps
+  // testing the wiring instead of the convention.
+  const beforeLook = { x: game.player.x, z: game.player.z };
+  await hold('KeyW', 30);
+  const turned = { x: game.player.x - beforeLook.x, z: game.player.z - beforeLook.z };
+  const turnedLen = Math.hypot(turned.x, turned.z);
+  assert(turnedLen > 1, `the character moved after the turn (${turnedLen.toFixed(1)}m)`);
+  assertClose(turned.x / turnedLen, -Math.sin(game.view.yaw), 0.1, 'and walks the new heading in x');
+  assertClose(turned.z / turnedLen, -Math.cos(game.view.yaw), 0.1, 'and in z');
+
+  // --- E interacts, through the mission stage that needs it. ---------------
+  for (let i = 0; i < 12 && !game.mission; i++) await pumpFrames(30);
+  let stage = game.mission && game.mission.stages.find(s => s.type === 'interact');
+  for (let tries = 0; tries < 8 && !stage; tries++) {
+    if (!game.mission) { for (let i = 0; i < 12 && !game.mission; i++) await pumpFrames(30); }
+    if (game.mission) {
+      const idx = game.mission.stageIndex;
+      game.teleport(game.mission.stages[idx].x, game.mission.stages[idx].z);
+      await pumpFrames(3);
+    }
+    stage = game.mission && game.mission.stages.find(s => s.type === 'interact');
+  }
+  assert(stage, 'the world offers a job with an interact stage');
+  game.teleport(stage.x, stage.z);
+  await pumpFrames(3);
+  const before = game.mission.stageIndex;
+  await hold('KeyE', 3);
+  await pumpFrames(4);
+  assert(game.mission.stageIndex > before, 'pressing E advances the interact stage');
+
+  // --- T toggles the renderer, once per press and not while held. ----------
+  const mode = game.renderer.mode;
+  await hold('KeyT', 2);
+  assert(game.renderer.mode !== mode, 'T switches renderer mode');
+  // Holding the key must not machine-gun the toggle: a second press needs a
+  // release first, which is what `wasPressed` buys.
+  fireGlobal('keydown', { code: 'KeyT' });
+  await pumpFrames(20);
+  fireGlobal('keyup', { code: 'KeyT' });
+  await pumpFrames(2);
+  assert(game.renderer.mode === mode, 'holding T does not re-toggle on every frame');
+
+  // --- Rebinding rewires the game, proving nothing is hard-coded. -----------
+  beginRebind(input, 'forward');
+  assert(isCapturing(input), 'the input layer is waiting for a new key');
+  fireGlobal('keydown', { code: 'KeyI' });
+  await pumpFrames(2);
+  fireGlobal('keyup', { code: 'KeyI' });
+  assert(input.bindings.forward.includes('KeyI'), 'I is now bound to forward');
+
+  // Displacement is not measurable here: the mission stage walk above left the
+  // character somewhere with a wall in front of it, and a blocked character is
+  // indistinguishable from an unbound key. `player.speed` is set from the same
+  // action state on the same code path, before the physics sweep, so it answers
+  // exactly the question being asked — did the game read the action — without
+  // depending on what happens to be in front of the player.
+  const speedWhileHeld = async (code) => {
+    game.look(-Math.PI / 2, 0);
+    await pumpFrames(2);
+    fireGlobal('keydown', { code });
+    await pumpFrames(8);
+    const held = game.player.speed;
+    fireGlobal('keyup', { code });
+    await pumpFrames(4);
+    return { held, released: game.player.speed };
+  };
+  const reboundW = await speedWhileHeld('KeyW');
+  assert(reboundW.held < 1, `W no longer drives movement once rebound (${reboundW.held.toFixed(1)} u/s)`);
+  const reboundI = await speedWhileHeld('KeyI');
+  assert(reboundI.held > 1, `and I drives it instead (${reboundI.held.toFixed(1)} u/s)`);
+  assert(reboundI.released < 1, 'releasing I stops the character');
+
+  assertGLHealthy(gl, 'input layer');
+});
+
 await test('the player moves through keyboard input and the world reacts', async () => {
   const { gl } = await boot({ frames: 10 });
   const game = globalThis.EMERGENT;
@@ -290,8 +461,13 @@ await test('quality levels change the streaming radius and rebuild cleanly', asy
   const seen = new Set();
   for (let i = 0; i < 4; i++) {
     seen.add(game.streamRadius);
+    // Press *and release*. Actions are edge-triggered, so holding Q cycles the
+    // quality once rather than four times a second — which is the point of the
+    // change, and means the test has to send the release a real player does.
     fireGlobal('keydown', { key: 'q' });
     await pumpFrames(4);
+    fireGlobal('keyup', { key: 'q' });
+    await pumpFrames(1);
   }
   assertEqual(seen.size, 4, 'each quality level should have a distinct stream radius');
   assertEqual(game.renderer.quality, 'HIGH', 'four presses from HIGH should wrap back to HIGH');

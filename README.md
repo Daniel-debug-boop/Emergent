@@ -35,9 +35,18 @@ Those are the jobs.
 
 ## Controls
 
-Desktop: `WASD` / arrows move, `Shift` sprint, `Space` jump, click + mouse look, `E` interact, `T` standard/adaptive renderer, `Q` quality, `V` first/third-person camera, `F2` save, `F3` load, `D` developer telemetry, `N` new world.
+Desktop: `WASD` / arrows move, `Shift` sprint, `Space` jump, click + mouse look, `E` interact, `T` standard/adaptive renderer, `Q` quality, `V` first/third-person camera, `F2` save, `F3` load, `F1` developer telemetry, `N` new world.
 
 Mobile: virtual joystick, RUN and E buttons appear automatically on narrow screens.
+Gamepad: left stick move, triggers sprint, A jump, X interact, Y camera.
+
+Every control above is a row in one binding table in `input.mjs`, not a key
+comparison in the game loop. Keyboard, gamepad and touch write into the same
+action state; the game reads `moveAxes`, `isDown` and `wasPressed` and nothing
+else. Rebinding (`beginRebind` / `completeRebind` / `resetBindings` /
+`serialiseBindings`) operates on the live state, and `EMERGENT.input` exposes it,
+so changing a control is a data edit rather than a source edit. A press is
+edge-triggered: holding a toggle key fires it once, not once per frame.
 
 ## Movement and collision
 
