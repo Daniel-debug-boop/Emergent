@@ -1,5 +1,167 @@
 # CHANGELOG
 
+## 2026-09-27 — the city stops being boxes with better textures
+
+EMERGENT had no textures at all. The vertex format was position, normal and
+colour; the fragment shader was a Lambert term against a sun direction. Every
+surface in the world was a flat colour. That is not a look that can be fixed by
+making the boxes nicer, so this is the rendering and asset foundation the rest
+of the game stands on.
+
+**26 CC0 materials, acquired and processed.** Every entry is hand-selected in
+`assets/database.mjs` with a written reason, downloaded from Poly Haven,
+md5-verified against the provider's published checksums, and resampled and
+validated into three 512px texture arrays. Base colour, tangent-space normal
+and packed AO/roughness/metalness, 78 tiles, 17.4 MB shipped, 104 MB of VRAM.
+`assets/provenance.json` records the source URL, the named creator, the licence
+and the fetch date for all 26; `tools/assets/audit.mjs` fails the build if any
+of them stops being CC0 or stops matching what ships.
+
+**Validation that rejected real assets.** Three of the first cut were measured
+as not tiling — `stone_tile_wall` at 10.2x its interior edge difference,
+`wood_plank_wall` at 7.8x, `wood_planks` at 8.3x — and were replaced. Three more
+declared a metalness the provider's own maps contradicted: rusted iron measured
+0.001 metallic, and it is right, because rust is an oxide and an oxide is a
+dielectric. The database was wrong, not the textures. Painted metal is now
+forced to zero across every shutter, pole and railing in the city.
+
+**The material system was not actually connected to the shader.** This is the
+one that matters, and it is worth being blunt about: everything above — the
+fetch, the bake, the validation, the provenance, the audit, the texture arrays,
+the material table, the geometry kit — was in place and green, and the game was
+still drawing every surface in the world with `colour * (ambient + lambert)`.
+The fragment shader read `layout(location=0..2)` and stopped. It never declared
+`uAlbedoTex`, `uNormalTex` or `uArmTex`; it never declared `uMatA` or `uMatB`;
+it never read the material index the vertex buffer was uploading every frame as
+`location=3`. The 78 texture tiles were decoded, uploaded to the GPU and bound
+to units 0, 1 and 2 every frame, and then never read.
+
+Every test in the repository passed. The harness reported clean frames, zero
+validation errors, zero NaN uploads, three complete texture arrays and
+geometry carrying material indices that "the shader can resolve" — the test
+asserted the *upload*, and the upload was fine. The upload was never the
+problem.
+
+`sceneFS` is now a real shader. It resolves the material index through
+`uMatA`/`uMatB`, samples albedo, normal and packed ARM from the three
+`sampler2DArray`s at that material's layer, and shades with a GGX + Smith
+microfacet BRDF: dielectric and metal reflectance mixed per material
+(`mix(vec3(0.04), albedo, metallic)`, so painted steel is a dielectric and
+bare galvanised steel is not), a hemispherical sky/ground ambient so a shaded
+wall is not black, an environment term through the roughness-aware Fresnel
+that gives rough surfaces something to reflect, and emissive strength for
+lit windows and lamps that rises at night. Textures are box-projected in the
+vertex shader from the material's recorded role — no seams, no unwrapping, no
+UV attribute, and world-locked so a brick wall's bricks stay where they are
+while the player walks past. Moving geometry keeps solid materials on purpose:
+a world-locked projection on a car at 20 m/s slides its paint across its own
+body.
+
+**Two new suites, because the harness cannot see any of this.**
+`tools/headless_runtime.mjs` stores shader source and reports
+`COMPILE_STATUS` true for everything, since it does not compile GLSL — so a
+syntax error in a shader is invisible to every other test in the project, and a
+shader that compiles but does nothing is worse.
+
+- `test_shaders.mjs` (new, 8 tests) parses all four shaders with
+  `@shaderfrog/glsl-parser`, and then checks the wiring in both directions:
+  every uniform the renderer sets is declared in a shader, and every uniform a
+  shader declares is set. It asserts the vertex shader reads all four
+  attributes the buffers upload, that the three texture arrays are declared as
+  `sampler2DArray` and actually sampled, and that the `uMatA` array size is
+  interpolated from `MAX_MATERIALS` rather than hand-typed.
+- `test_shading.mjs` (new, 11 tests, 7,831 assertions) transliterates the
+  box mapping and the BRDF into JS and asserts behaviour, because parsing a
+  shader says nothing about whether the maths is right. It checks the normal is
+  flipped toward the eye; that a lit surface beats a shadowed one by exactly
+  Lambert's cosine law rather than by a brightness constant; that roughness
+  *widens the specular lobe* — a sharp highlight dominating at the mirror
+  direction and falling off off it, which a shader that merely multiplies
+  brightness by roughness cannot pass; that a dielectric reflects 4% at normal
+  incidence and a metal takes its reflectance from its albedo; that a sky-facing
+  surface sees more ambient than a ground-facing one; and a 7,776-case sweep
+  for non-finite or negative output. Its last test re-reads the GLSL and
+  asserts the transliteration still matches it, so the two cannot drift.
+
+`test_project.mjs` now names the specific wiring too. Deleting
+`sampler2DArray uAlbedoTex` from the shader was run as a negative control: the
+project test fails with *"the material system is not reachable from the
+shader"*, which is the failure that should have caught this the day the
+material system landed.
+
+**A real material system.** `materials.mjs` merges the baked set with 17
+untextured PBR surfaces into one index space uploaded as two uniform arrays. The
+shader has one code path. Texture coordinates are world-planar box mapping
+derived in the vertex shader from the normal, so there are no seams, no
+unwrapping, and no UV attribute — and moving geometry deliberately uses solid
+materials instead, because a world-locked texture on a car at 20 m/s slides its
+paint across its own body.
+
+**Geometry that is actually architecture.** `geometry.mjs` is a detail kit of
+real small solids: window units with reveals, frames, transoms and projecting
+sills; doors with steps and awnings; cornices and parapets with copings; gable
+and sawtooth roofs; fire escapes; street lamps with arms reaching over the
+carriageway; traffic lights; containers, pallets, crates, bins, hydrants,
+benches, bus shelters. `city.mjs` composes them: buildings get a plinth, a
+string course per floor, a cornice, a window grid, balconies, roof plant,
+downpipes, signage and street dressing; roads get markings, kerbs, crossings,
+drains and lighting; trees get a root flare, branches and a seeded canopy.
+
+**Four real bugs this found, all of which would have shipped.** `cone` and
+`gableRoof` emitted unnormalised normals, so every cone and every roof in the
+world was lit up to 2.2x too bright — a bad normal is not a crash, it is
+silently wrong. Characters were 1.60 m tall and labelled 1.78 m, because the
+proportion fractions summed to 0.9. And `bench` and `pallet` passed a material
+index into the colour argument, producing vertices that were finite and
+therefore passed every NaN check while drawing as garbage; the geometry kit now
+throws at the single vertex-emission choke point instead.
+
+**Measured, on this machine, before and after the LOD pass:**
+
+| | naive detail | with LOD |
+|---|---|---|
+| Static vertices | 1,420,680 | 218,226 |
+| Static buffer | 54.2 MB | 8.3 MB |
+| Static build | 668 ms | 99 ms |
+| Dynamic build | 10.11 ms | 2.79 ms |
+
+Detail falls off over a radius deliberately shorter than the streaming radius,
+so a building the player can read has its windows and roof plant and one 800 m
+away is a correctly materialled mass. Characters and cars have their own, much
+tighter, visual LOD.
+
+**The harness grew a texture model.** `tools/headless_runtime.mjs` now validates
+texture arrays: layers in range, internal format against its `(format, type)`
+pair, a mipmap minification filter with no mip chain reported as the incomplete
+texture it is, and empty layers named. It cannot produce pixels, and it cannot
+compile GLSL, so what is claimed here is the contract, not the image — which is
+exactly why `test_shaders.mjs` and `test_shading.mjs` exist, and why the
+harness should not be trusted alone on anything visual.
+
+Verification, all run on this machine:
+
+- `tools/assets/bake.mjs` — 26 materials, every validation passed
+- `tools/assets/audit.mjs` — every asset CC0, sourced, referenced, present
+- `test_geometry.mjs` (new) — **34,888 assertions**: material table integrity,
+  vertex layout, every emitter's normals and indices, and real-world proportions
+  for windows, containers, lamps, cars and people
+- `test_shaders.mjs` (new) — 8 tests, 97 assertions: all four shaders parse,
+  and the uniform and attribute wiring holds in both directions
+- `test_shading.mjs` (new) — 11 tests, 7,831 assertions: the BRDF's physical
+  behaviour, including a 7,776-case sweep for non-finite or negative output
+- `test_headless_game.mjs` — two new tests: three complete texture arrays with
+  one layer per material, and a walk of the uploaded vertex buffer proving every
+  material index resolves. **15/15 tests, 20,937 assertions**
+- `npm test` — world, math, culling, missions, geometry, physics, input,
+  project, tooling, runtime: all green
+- `npm run build` — 23 MB, `dist/` boots and renders headlessly
+
+`docs/ASSET_PIPELINE.md` has the full reference, including the reasoning for
+RGBA8 over KTX2/Basis, what the harness cannot verify, and this honestly
+stated list of what is **not** done: no interiors, no downloaded models, no
+decal system, no triplanar terrain blending, no vegetation impostors, and no
+measured frame rate — all of which is **FINAL HARDWARE VALIDATION REQUIRED**.
+
 ## 2026-09-27 — the controls are data, not key checks
 
 Every control in EMERGENT was a hard-coded key comparison. `updatePlayer` read

@@ -4,7 +4,7 @@
   "type": "module",
   "description": "EMERGENT — procedural 3D open-world game",
   "scripts": {
-    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:missions && npm run test:physics && npm run test:input && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:missions && npm run test:geometry && npm run test:shaders && npm run test:shading && npm run test:physics && npm run test:input && npm run test:project && npm run test:tooling && npm run test:runtime",
     "test:world": "node test_world.mjs",
     "test:math": "node test_math3d.mjs",
     "test:culling": "node test_culling.mjs",
@@ -14,14 +14,25 @@
     "test:project": "node test_project.mjs",
     "test:tooling": "node test_tooling.mjs",
     "test:runtime": "node test_headless_game.mjs",
-    "check": "node --check game3d.js",
+    "check": "node --check game3d.js && node --check geometry.mjs && node --check city.mjs && node --check materials.mjs && node --check textures.mjs",
     "dev": "node tools/serve.mjs",
     "build": "node tools/build.mjs",
     "bench": "node tools/headless_runtime.mjs --frames=300",
     "bench:adaptive": "node tools/headless_runtime.mjs --frames=300 --mode=adaptive",
-    "audit": "npm test && npm run check"
+    "audit": "npm test && npm run check",
+    "test:geometry": "node test_geometry.mjs",
+    "test:shaders": "node test_shaders.mjs",
+    "test:shading": "node test_shading.mjs",
+    "assets:fetch": "node tools/assets/fetch.mjs",
+    "assets:bake": "node tools/assets/bake.mjs",
+    "assets:probe": "node tools/assets/probe.mjs",
+    "assets:audit": "node tools/assets/audit.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0"
+  },
+  "devDependencies": {
+    "@shaderfrog/glsl-parser": "^7.0.1",
+    "sharp": "^0.34.4"
   }
 }

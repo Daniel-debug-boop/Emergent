@@ -1,6 +1,11 @@
 import { clamp, rng, hash2, terrainHeight, generateWorld, districtAt } from './world.mjs';
 import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
+import { MATERIAL_DESCRIPTOR } from './assets/textures/materials.mjs';
+import { buildMaterialTable, MAX_MATERIALS } from './materials.mjs';
+import { createMaterialTextures, bindMaterialTextures as bindTextures, mipLevels, UNITS } from './textures.mjs';
+import { createGeometryKit, VERTEX_FLOATS, VERTEX_BYTES } from './geometry.mjs';
+import { buildBuilding, buildRoad, buildTree, buildBush, dressStreet, dressBuilding, buildCrossing, buildCar, buildCarProxy, buildCharacter, buildCharacterProxy } from './city.mjs';
 import {
   createPhysicsWorld, ensurePlayer, stepPlayer, playerFeet, setStaticBox,
   removeStaticBox, setAgentBox, removeAgent, buildHeightfield, teleportPlayer,
@@ -318,140 +323,73 @@ function colorForBuilding(b) {
   return [clamp(p[t][0] + skew, 0.15, 0.85), clamp(p[t][1] + skew, 0.15, 0.85), clamp(p[t][2] + skew, 0.15, 0.85)];
 }
 
-function pushV(arr, p, n, c) { arr.push(p[0],p[1],p[2], n[0],n[1],n[2], c[0],c[1],c[2]); }
-
-function pushQuad(arr, a,b,c,d,n,color) {
-  pushV(arr,a,n,color); pushV(arr,b,n,color); pushV(arr,c,n,color);
-  pushV(arr,a,n,color); pushV(arr,c,n,color); pushV(arr,d,n,color);
-}
-
-function pushBox(arr,x,y,z,w,h,d,color,topColor=color) {
-  const x0=x-w/2,x1=x+w/2,y0=y,y1=y+h,z0=z-d/2,z1=z+d/2;
-  pushQuad(arr,[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[0,0,-1],color);
-  pushQuad(arr,[x1,y0,z1],[x0,y0,z1],[x0,y1,z1],[x1,y1,z1],[0,0,1],color);
-  pushQuad(arr,[x0,y0,z1],[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[-1,0,0],color);
-  pushQuad(arr,[x1,y0,z0],[x1,y0,z1],[x1,y1,z1],[x1,y1,z0],[1,0,0],color);
-  pushQuad(arr,[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1],[0,1,0],topColor);
-  pushQuad(arr,[x0,y0,z1],[x1,y0,z1],[x1,y0,z0],[x0,y0,z0],[0,-1,0],color);
-}
-
-function pushCylinder(arr,x,y,z,r,h,color,segments=8) {
-  const top=[x,y+h,z], bot=[x,y,z];
-  for(let i=0;i<segments;i++){
-    const a=i*Math.PI*2/segments, b=(i+1)*Math.PI*2/segments;
-    const p0=[x+Math.cos(a)*r,y,z+Math.sin(a)*r], p1=[x+Math.cos(b)*r,y,z+Math.sin(b)*r];
-    const q0=[p0[0],y+h,p0[2]], q1=[p1[0],y+h,p1[2]];
-    const n0=[Math.cos(a),0,Math.sin(a)], n1=[Math.cos(b),0,Math.sin(b)];
-    pushV(arr,p0,n0,color);pushV(arr,p1,n1,color);pushV(arr,q1,n1,color);
-    pushV(arr,p0,n0,color);pushV(arr,q1,n1,color);pushV(arr,q0,n0,color);
-    pushV(arr,top,[0,1,0],color);pushV(arr,q0,[0,1,0],color);pushV(arr,q1,[0,1,0],color);
-  }
-}
-
-function pushLowPolyTree(arr,x,y,z,s,type,seed) {
-  const trunk=[0.25,0.16,0.09]; pushCylinder(arr,x,y,z,0.18*s,1.7*s,trunk,6);
-  const base = type==='pine'?[0.08,0.25,0.13]:type==='broadleaf'?[0.14,0.36,0.19]:[0.10,0.31,0.15];
-  // Per-tree brightness variation in [0.85, 1.15], derived from the tree's
-  // own seed so the canopy reads as varied but stays deterministic.
-  const variation=0.85+((seed*0.3)%0.3);
-  const tint=(v,k=1)=>clamp(v*variation*k,0.05,1);
-  const canopy=[tint(base[0]),tint(base[1]),tint(base[2])];
-  if(type==='pine'){
-    pushCylinder(arr,x,y+0.8*s,z,0.9*s,2.2*s,canopy,7);
-    pushCylinder(arr,x,y+1.8*s,z,0.62*s,1.9*s,[tint(base[0],1.12),tint(base[1],1.12),tint(base[2],1.12)],7);
-  } else {
-    pushCylinder(arr,x,y+1.0*s,z,0.92*s,1.35*s,canopy,7);
-    pushCylinder(arr,x+0.28*s,y+1.6*s,z-0.16*s,0.68*s,1.0*s,[tint(base[0],1.08),tint(base[1],1.08),tint(base[2],1.08)],7);
-  }
-}
-
-function pushRoad(arr, r) {
-  const y=terrainHeight(r.x+r.w/2,r.z+r.d/2,seed)+0.07;
-  const asphalt=r.main>=2?[0.07,0.08,0.09]:r.main===1?[0.10,0.11,0.12]:[0.13,0.13,0.13];
-  pushBox(arr,r.x+r.w/2,y,r.z+r.d/2,r.w,0.18,r.d,asphalt,asphalt);
-  const sidewalk=[0.28,0.28,0.26];
-  const side=2.2;
-  if(r.w<r.d){
-    pushBox(arr,r.x-2,y+0.03,r.z+r.d/2,side,0.08,r.d,sidewalk);
-    pushBox(arr,r.x+r.w+2,y+0.03,r.z+r.d/2,side,0.08,r.d,sidewalk);
-  } else {
-    pushBox(arr,r.x+r.w/2,y+0.03,r.z-2,r.w,0.08,side,sidewalk);
-    pushBox(arr,r.x+r.w/2,y+0.03,r.z+r.d+2,r.w,0.08,side,sidewalk);
-  }
-}
-
-function pushBuilding(arr,b,detail) {
-  const y=terrainHeight(b.x,b.z,seed);
-  const c=colorForBuilding(b);
-  const top=[clamp(c[0]+0.08,0,1),clamp(c[1]+0.08,0,1),clamp(c[2]+0.08,0,1)];
-  pushBox(arr,b.x,y,b.z,b.w,b.h,b.d,c,top);
-  const roof=[0.12,0.13,0.15];
-  if(b.kind!=='tower' && detail>0.3) {
-    pushBox(arr,b.x,y+b.h+0.35,b.z,b.w*0.92,0.7,b.d*0.92,roof,roof);
-  }
-  if(detail>0.55) {
-    const glass=[0.14,0.25,0.31];
-    const rows=Math.min(b.floors,6);
-    const cols=Math.max(1,Math.floor(b.w/15));
-    for(let f=0;f<rows;f++) for(let col=0;col<cols;col++) {
-      if((col+f+Math.floor(b.seed*10))%5===0) continue;
-      const wx=b.x-b.w/2+7+(col*(b.w-14)/Math.max(1,cols-1));
-      const wz=b.z-b.d/2-0.03;
-      const wy=y+3.0+f*(b.h-4)/Math.max(1,rows);
-      pushBox(arr,wx,wy,wz,Math.min(6,b.w/cols*0.45),1.4,0.05,glass,glass);
-    }
-    const door=[0.18,0.11,0.07];
-    pushBox(arr,b.x,y+0.8,b.z+b.d/2+0.03,1.5,2.1,0.08,door,door);
-    if(b.sign) pushBox(arr,b.x,y+3.1,b.z+b.d/2+0.05,4.5,0.7,0.08,[0.75,0.48,0.16]);
-  }
-  // A small service alley/vent for industrial structures makes warehouses visually distinct.
-  if(b.kind==='warehouse' && detail>0.4) pushBox(arr,b.x+b.w*0.28,y+2.5,b.z+b.d/2+0.03,7,4,0.1,[0.23,0.27,0.27]);
-}
-
-function pushStreetFurniture(arr,x,z,detail) {
-  if(detail<0.55) return;
-  const y=terrainHeight(x,z,seed)+0.09;
-  pushCylinder(arr,x,y,z,0.08,3.1,[0.16,0.17,0.18],6);
-  pushBox(arr,x,y+3.1,z,0.28,0.08,0.28,[0.62,0.60,0.45]);
-  if(detail>0.8) pushBox(arr,x,y+1.2,z,0.8,0.5,0.16,[0.20,0.20,0.18]);
-}
+/** The shadow pass is position-only: three floats per vertex. */
+const SHADOW_FLOATS = 3;
+const SHADOW_BYTES = SHADOW_FLOATS * 4;
 
 /**
- * Append a low-poly character to `arr`.
- * Takes the fields it needs by value rather than an NPC object: the adaptive
- * renderer rebuilds this for every visible resident many times a second, and
- * spreading a whole NPC (identity, schedule, memory array) to supply five
- * scalars allocated a throwaway object per agent per rebuild.
+ * The material table and the geometry kit.
+ *
+ * Built once at module load. `materials.mjs` merges the baked texture set with
+ * the untextured solids into one index space; `geometry.mjs` binds every
+ * emitter to it. Nothing below this point names a material by anything other
+ * than its id string, and every one of those strings is checked at the point of
+ * use.
  */
-function pushNpc(arr,x,z,id,job,activity,detail) {
-  const y=terrainHeight(x,z,seed);
-  const skin=[0.56+0.12*(id%4)/3,0.36+0.14*(id%5)/4,0.25+0.16*(id%3)/2];
-  const shirt=job==='worker'?[0.72,0.46,0.28]:job==='merchant'?[0.32,0.55,0.72]:job==='service'?[0.30,0.63,0.45]:[0.54,0.39,0.67];
-  const bob=Math.sin(elapsed*6+id)*0.025*(activity==='travel'?1:0.2);
-  pushBox(arr,x,y+bob,z,0.62,1.10,0.40,shirt,shirt);
-  pushCylinder(arr,x,y+1.1+bob,z,0.23,0.48,skin,7);
-  if(detail>0.35){
-    const leg= [0.12,0.13,0.15];
-    pushBox(arr,x-0.17,y-0.02,z,0.16,0.55,0.28,leg,leg);
-    pushBox(arr,x+0.17,y-0.02,z,0.16,0.55,0.28,leg,leg);
-    if(detail>0.65){
-      pushBox(arr,x-0.40,y+0.62+bob,z,0.14,0.55,0.14,shirt,shirt);
-      pushBox(arr,x+0.40,y+0.62+bob,z,0.14,0.55,0.14,shirt,shirt);
+const MATERIALS = buildMaterialTable(MATERIAL_DESCRIPTOR);
+const G = createGeometryKit(MATERIALS);
+
+/**
+ * Which texture the terrain uses, by biome.
+ *
+ * Three ground materials rather than one, because a single ground texture over
+ * a whole city is the most obvious way a large world looks synthetic. The
+ * biome is a coarse 1200-unit grid from the world generator, so the boundaries
+ * fall on grid lines and the transition can be hidden by scattering.
+ */
+/**
+ * GPU-side material state.
+ *
+ * Starts not-ready: the first frames render with flat vertex colours, which is
+ * what the renderer did before materials existed and is a correct — if plain —
+ * fallback. The PBR path takes over when the last array is uploaded. A player
+ * never sees a loading screen for it, and a failure to load one wall's texture
+ * degrades one wall rather than preventing the game from starting.
+ */
+const materialState = { ready: false, failed: [], loaded: 0, total: 0, textures: {} };
+let materialUpload = null;
+
+/** Start the upload. Called once, at boot, and it never blocks. */
+function startMaterialUpload() {
+  materialUpload = createMaterialTextures(gl, MATERIAL_DESCRIPTOR, (p) => {
+    materialState.loaded = p.loaded;
+    materialState.total = p.total;
+    materialState.failed = p.failed;
+  });
+  materialUpload.promise.then((s) => {
+    materialState.ready = s.ready;
+    materialState.failed = s.failed;
+    if (s.failed.length) {
+      // Reported rather than swallowed. A silently missing material is
+      // indistinguishable from a bug in the material table, and this is the one
+      // line that tells them apart.
+      console.warn(`EMERGENT: ${s.failed.length} of ${s.total} material tiles failed to load:`);
+      for (const f of s.failed.slice(0, 8)) console.warn('  ' + f);
     }
-  }
+  }).catch((err) => {
+    console.warn('EMERGENT: material upload failed, falling back to untextured rendering —', err);
+  });
 }
 
-function pushCar(arr,c) {
-  const y=terrainHeight(c.x,c.z,seed)+0.35;
-  const col=c.color;
-  pushBox(arr,c.x,y,c.z,c.horizontal?4.0:2.0,0.65,c.horizontal?2.0:4.0,col,col);
-  pushBox(arr,c.x,y+0.55,c.z,c.horizontal?2.1:1.2,0.42,c.horizontal?1.2:2.0,[0.12,0.17,0.19]);
-  const wheel=[0.06,0.06,0.07];
-  if(c.horizontal){
-    for(const dx of [-1.3,1.3]) { pushCylinder(arr,c.x+dx,y-0.05,c.z-0.93,0.23,0.22,wheel,8); pushCylinder(arr,c.x+dx,y-0.05,c.z+0.93,0.23,0.22,wheel,8); }
-  } else {
-    for(const dz of [-1.3,1.3]) { pushCylinder(arr,c.x-0.93,y-0.05,c.z+dz,0.23,0.22,wheel,8); pushCylinder(arr,c.x+0.93,y-0.05,c.z+dz,0.23,0.22,wheel,8); }
-  }
+function bindMaterialTextures() {
+  if (!materialState.ready) return;
+  bindTextures(gl, materialState);
+}
+
+function groundMaterial(biome){
+  if (biome === 'lush') return 'terrain_grass';
+  if (biome === 'dry') return 'terrain_dirt';
+  return hash2(player ? player.x * 0.004 : 0, player ? player.z * 0.004 : 0, seed) > 0.5 ? 'terrain_grass' : 'terrain_dirt';
 }
 
 function createProgram(vsSource, fsSource) {
@@ -459,18 +397,102 @@ function createProgram(vsSource, fsSource) {
   const p=gl.createProgram();gl.attachShader(p,compile(gl.VERTEX_SHADER,vsSource));gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fsSource));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));return p;
 }
 
+// One shader for every surface in the game. It has no idea what a wall or a
+// car is: it reads the material index off the vertex, resolves it through the
+// uploaded material table, and shades whatever comes out. That is the whole
+// point of the table — a new surface is a new row, not a new shader.
+//
+// The material table is a pair of vec4 arrays rather than a data texture,
+// because it is a few hundred bytes and a texture would cost a sampler and a
+// cache line to read the same numbers. The array size is baked in from
+// MAX_MATERIALS so the two can never disagree.
+const MAT_UNIFORMS = MAX_MATERIALS;
+
 const sceneVS = `#version 300 es
 precision highp float;
-layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c;
+layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c; layout(location=3) in float m;
 uniform mat4 uPV; uniform vec3 uCam; uniform float uTime; uniform float uWater;
-out vec3 vN; out vec3 vC; out float vD; out vec3 vP;
-void main(){ vec3 q=p; if(uWater>0.5) q.y += sin(q.x*0.025+uTime*1.6)*0.08 + cos(q.z*0.021+uTime)*0.06; gl_Position=uPV*vec4(q,1.0); vN=n; vC=c; vD=distance(q,uCam); vP=q; }`;
+uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
+out vec3 vN; out vec3 vC; out float vD; out vec3 vP; out vec2 vUV; out float vMat; out float vT;
+void main(){
+  vec3 q=p; if(uWater>0.5) q.y += sin(q.x*0.025+uTime*1.6)*0.08 + cos(q.z*0.021+uTime)*0.06;
+  gl_Position=uPV*vec4(q,1.0);
+  vN=n; vC=c; vD=distance(q,uCam); vP=q; vMat=m;
+  int mi=int(m+0.5);
+  // Box mapping. The plane comes from the material's recorded role rather than
+  // from the normal, so a road tiles as ground and a facade tiles as a wall
+  // even where a chamfer or a pitched roof made the normal ambiguous. World
+  // locked, so a brick wall's bricks stay put while the player walks past.
+  float mode=uMatB[mi].x;
+  vec2 uv = p.xz;
+  if(mode>0.5 && mode<1.5) uv=p.zy; else if(mode>1.5 && mode<2.5) uv=p.xy;
+  vUV=uv*uMatA[mi].y;
+  vT=uMatB[mi].w;
+}`;
 
 const sceneFS = `#version 300 es
-precision highp float; in vec3 vN; in vec3 vC; in float vD; in vec3 vP;
+precision highp float;
+in vec3 vN; in vec3 vC; in float vD; in vec3 vP; in vec2 vUV; in float vMat; in float vT;
 uniform vec3 uSun; uniform vec3 uFog; uniform vec3 uAmbient; uniform float uFogDensity; uniform float uNight; uniform float uWater;
+uniform vec3 uSunColor; uniform vec3 uSkyColor; uniform vec3 uGroundColor;
+uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
+uniform sampler2DArray uAlbedoTex; uniform sampler2DArray uNormalTex; uniform sampler2DArray uArmTex;
+uniform float uMaterialsReady;
 out vec4 outC;
-void main(){ float nd=max(dot(normalize(vN),normalize(uSun)),0.0); float light=0.28+0.72*nd; vec3 c=vC*(uAmbient+light*0.72); if(uWater>0.5) c=mix(c,vec3(0.08,0.25,0.35),0.42); float fog=1.0-exp(-vD*vD*uFogDensity); c=mix(c,uFog,fog); if(uNight>0.35 && vC.r>0.55 && vC.g>0.32 && uWater<0.5) c+=vec3(0.02,0.016,0.006)*uNight; outC=vec4(c,1.0); }`;
+const float PI=3.14159265;
+float d_ggx(float NoH,float a){float a2=a*a;float d=NoH*NoH*(a2-1.0)+1.0;return a2/max(PI*d*d,1e-7);}
+float g_smith(float NoV,float NoL,float a){float k=a*0.5;return (NoV/(NoV*(1.0-k)+k))*(NoL/(NoL*(1.0-k)+k));}
+vec3 fres(float u,vec3 f0){return f0+(1.0-f0)*pow(clamp(1.0-u,0.0,1.0),5.0);}
+void main(){
+  int mi=int(vMat+0.5);
+  vec4 A=uMatA[mi]; vec4 B=uMatB[mi];
+  // Face the normal at the eye. Without this, a box corner built from two
+  // opposing faces shades both of them identically and every solid reads flat.
+  vec3 Ng=normalize(vN);
+  vec3 V=normalize(uCam-vP);
+  vec3 N=dot(Ng,V)<0.0?-Ng:Ng;
+  vec3 L=normalize(uSun);
+  vec3 albedo=vC; float rough=A.z; float metal=A.w; float ao=1.0; float emis=B.z;
+  if(vT>0.5 && uMaterialsReady>0.5){
+    int layer=int(A.x);
+    vec4 alb=texture(uAlbedoTex,vec3(vUV,float(layer)));
+    vec4 arm=texture(uArmTex,vec3(vUV,float(layer)));
+    vec3 nt=texture(uNormalTex,vec3(vUV,float(layer))).xyz*2.0-1.0;
+    // A tangent frame derived from the projection the UV came from. There are
+    // no tangents in the vertex format because every textured surface here is a
+    // box-projected plane, so the tangent is one world axis and costs nothing.
+    vec3 up=abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0);
+    vec3 T=normalize(cross(up,N));
+    vec3 Bt=cross(N,T);
+    nt.xy*=B.y;
+    albedo*=alb.rgb;
+    ao=arm.r; rough=clamp(arm.g,0.04,1.0); metal=arm.b;
+    N=normalize(mat3(T,Bt,N)*nt);
+  }
+  vec3 f0=mix(vec3(0.04),albedo,metal);
+  vec3 diffC=albedo*(1.0-metal);
+  float NoV=max(dot(N,V),1e-4);
+  vec3 direct=vec3(0.0);
+  float NoL=dot(N,L);
+  if(NoL>0.0){
+    vec3 H=normalize(L+V);
+    float NoH=max(dot(N,H),0.0); float VoH=max(dot(V,H),0.0);
+    float a=rough*rough;
+    vec3 spec=fres(VoH,f0)*(d_ggx(NoH,a)*g_smith(NoV,NoL,a)/max(4.0*NoV*NoL,1e-5));
+    direct=(diffC/PI+spec)*uSunColor*NoL;
+  }
+  // Hemispherical ambient: a two-colour sky/ground irradiance. Not an IBL, but
+  // it is what keeps a shaded wall off flat black and gives a rough surface
+  // something to reflect, and it costs two uniforms.
+  vec3 amb=mix(uGroundColor,uSkyColor,N.y*0.5+0.5);
+  vec3 R=reflect(-V,N);
+  vec3 env=mix(uGroundColor,uSkyColor,R.y*0.5+0.5);
+  vec3 ambient=diffC*amb*ao+env*fres(NoV,f0)*(1.0-rough*0.8)*ao*mix(0.30,1.0,metal);
+  vec3 c=direct+ambient+albedo*emis*(0.25+uNight*0.95);
+  if(uWater>0.5) c=mix(c,vec3(0.08,0.25,0.35),0.42);
+  float fog=1.0-exp(-vD*vD*uFogDensity); c=mix(c,uFog,fog);
+  outC=vec4(c,1.0);
+}`;
 
 const shadowVS = `#version 300 es
 precision highp float; layout(location=0) in vec3 p; uniform mat4 uPV; void main(){gl_Position=uPV*vec4(p,1.0);}`;
@@ -484,14 +506,44 @@ const shadowProg=createProgram(shadowVS,shadowFS);
 const vao=gl.createVertexArray(); const staticBuf=gl.createBuffer(); const dynamicBuf=gl.createBuffer(); const shadowBuf=gl.createBuffer();
 const loc={
   uPV:gl.getUniformLocation(sceneProg,'uPV'),uCam:gl.getUniformLocation(sceneProg,'uCam'),uTime:gl.getUniformLocation(sceneProg,'uTime'),uSun:gl.getUniformLocation(sceneProg,'uSun'),uFog:gl.getUniformLocation(sceneProg,'uFog'),uAmbient:gl.getUniformLocation(sceneProg,'uAmbient'),uFogDensity:gl.getUniformLocation(sceneProg,'uFogDensity'),uNight:gl.getUniformLocation(sceneProg,'uNight'),uWater:gl.getUniformLocation(sceneProg,'uWater'),
+  uSunColor:gl.getUniformLocation(sceneProg,'uSunColor'),uSkyColor:gl.getUniformLocation(sceneProg,'uSkyColor'),uGroundColor:gl.getUniformLocation(sceneProg,'uGroundColor'),
+  uMatA:gl.getUniformLocation(sceneProg,'uMatA'),uMatB:gl.getUniformLocation(sceneProg,'uMatB'),
+  uAlbedoTex:gl.getUniformLocation(sceneProg,'uAlbedoTex'),uNormalTex:gl.getUniformLocation(sceneProg,'uNormalTex'),uArmTex:gl.getUniformLocation(sceneProg,'uArmTex'),
+  uMaterialsReady:gl.getUniformLocation(sceneProg,'uMaterialsReady'),
+  // GLSL array uniforms must be bound by name with either [0] or the bare name.
+  // A bare lookup for an array can return null on some drivers, which fails
+  // silently as "no material ever changed", so the [0] form is used explicitly.
+  uMatA0:gl.getUniformLocation(sceneProg,'uMatA[0]'),uMatB0:gl.getUniformLocation(sceneProg,'uMatB[0]'),
   sPV:gl.getUniformLocation(shadowProg,'uPV')
 };
 
+// position(3) normal(3) colour(3) material(1) — 10 floats, 40 bytes. The
+// material index is a float rather than an integer attribute because a fourth
+// integer stream would need its own divisor setup for a value that is only
+// ever used as an array index, and the cost of the float is one byte per
+// vertex in a buffer the CPU rebuilds every frame anyway.
+const STRIDE = VERTEX_BYTES;
+
+/**
+ * Point the four vertex attributes at the currently bound array buffer.
+ *
+ * The stride is shared by the static, dynamic and shadow buffers because they
+ * all use the same vertex layout, so it is written once here rather than three
+ * times inline. The shadow buffer is position-only and gets a separate
+ * three-float layout.
+ */
+function setAttributePointers(){
+  gl.vertexAttribPointer(0,3,gl.FLOAT,false,VERTEX_BYTES,0);
+  gl.vertexAttribPointer(1,3,gl.FLOAT,false,VERTEX_BYTES,12);
+  gl.vertexAttribPointer(2,3,gl.FLOAT,false,VERTEX_BYTES,24);
+  gl.vertexAttribPointer(3,1,gl.FLOAT,false,VERTEX_BYTES,36);
+}
 gl.bindVertexArray(vao);
 gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0);
-gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12);
-gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,STRIDE,0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,STRIDE,12);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,3,gl.FLOAT,false,STRIDE,24);
+gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3,1,gl.FLOAT,false,STRIDE,36);
 gl.bindVertexArray(null);
 
 // Matrix math (perspective, look-at, multiply, point transform) lives in
@@ -537,7 +589,7 @@ function terrainChunk(builder,cx,cz,radius,detail){
     // Each quad is routed by its own centre, so a quad straddling a cell
     // boundary lands wholly in one cell. That keeps every cell's run
     // contiguous, which is what makes culling a sub-range draw.
-    pushQuad(builder.target((x0+x1)/2,(z0+z1)/2),[x0,y00,z0],[x1,y10,z0],[x1,y11,z1],[x0,y01,z1],[0,1,0],c);
+    G.quad(builder.target((x0+x1)/2,(z0+z1)/2),[x0,y00,z0],[x1,y10,z0],[x1,y11,z1],[x0,y01,z1],[0,1,0],c,G.M(groundMaterial(biome)));
   }
 }
 
@@ -564,12 +616,19 @@ function makeChunkBuilder() {
   };
 }
 
-/** Axis-aligned bounds of a stride-9 (pos, normal, colour) run of vertices. */
+/**
+ * Axis-aligned bounds of a run of vertices.
+ *
+ * Walks the shared vertex stride rather than a literal, because the stride
+ * changed from 9 to 10 when materials arrived and a hard-coded 9 here silently
+ * produced fractional run boundaries — which the frustum culler then used to
+ * draw ranges that start and end inside a vertex.
+ */
 function boundsOf(vertices, first, count) {
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < count; i++) {
-    const o = (first + i) * 9;
+    const o = (first + i) * VERTEX_FLOATS;
     const x = vertices[o], y = vertices[o + 1], z = vertices[o + 2];
     if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
     if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
@@ -586,15 +645,17 @@ function flattenCells(cells) {
   const runs = [];
   let offset = 0;
   for (const [key, arr] of cells) {
-    const count = arr.length / 9;
+    const count = arr.length / VERTEX_FLOATS;
     if (count === 0) continue;
-    vertices.set(arr, offset * 9);
+    vertices.set(arr, offset * VERTEX_FLOATS);
     const bounds = boundsOf(vertices, offset, count);
     runs.push({ key, first: offset, count, min: bounds.min, max: bounds.max });
     offset += count;
   }
   return { vertices, runs };
 }
+
+let staticBuildMs=0, dynamicBuildMs=0, staticBytes=0;
 
 function buildStaticScene() {
   if (!world || !player) return;
@@ -604,6 +665,18 @@ function buildStaticScene() {
   const radius = qualityLevel===0?680:qualityLevel===1?800:qualityLevel===2?980:1160;
   const adaptive = rendererMode===1;
   const staticDetail=adaptive?0.55+qualityLevel*0.12:0.82+qualityLevel*0.06;
+  // The distance over which detail is spent, as a fraction of what is actually
+  // streamed.
+  //
+  // Streaming radius and detail radius are different things and conflating them
+  // is what makes procedural cities either empty at 300 m or unaffordable. The
+  // stream exists so the world continues past the horizon; the detail radius
+  // exists so that a building the player can actually read has its windows, its
+  // cornice and its roof plant, and one 800 m away is a correctly materialled
+  // mass with the right silhouette. The exponent front-loads the falloff, which
+  // puts the budget where a player is looking instead of spreading it evenly
+  // over ground they will never walk on.
+  const detailRadius=(260+qualityLevel*180)*(adaptive?0.6:1);
   terrainChunk(builder,player.x,player.z,radius,staticDetail);
   const activeChunks = refreshStreamResidency(radius);
   syncBuildingColliders(activeChunks);
@@ -612,15 +685,22 @@ function buildStaticScene() {
   // Sun state is fixed for the duration of a static build, so resolve it once
   // instead of recomputing trig per building.
   const sun=sunState(), castShadows=sun.day>0.08, sx=sun.dir[0], sy=Math.max(0.2,sun.dir[1]), sz=sun.dir[2];
+  // Signs and windows are lit at night, and the static scene is rebuilt on the
+  // day/night cycle, so this is resolved once per build rather than per object.
+  const isNight=sun.day<0.34;
   addCellObjects('roads',r=>{
-    if(r.x+r.w<minX||r.x>maxX||r.z+r.d<minZ||r.z>maxZ)return; pushRoad(builder.target(r.x,r.z),r);
+    if(r.x+r.w<minX||r.x>maxX||r.z+r.d<minZ||r.z>maxZ)return;
+    // Roads get their own detail budget against the same radius, so a street
+    // the player is on has its markings, kerbs and lamps and one across the
+    // district is still a correctly surfaced carriageway.
+    buildRoad(G,builder.target(r.x,r.z),r,clamp(1-Math.hypot(r.x+r.w/2-player.x,r.z+r.d/2-player.z)/detailRadius,0,1)*staticDetail,seed);
   });
   addCellObjects('buildings',b=>{
     if(b.x+b.w/2<minX||b.x-b.w/2>maxX||b.z+b.d/2<minZ||b.z-b.d/2>maxZ)return;
-    const d=Math.hypot(b.x-player.x,b.z-player.z); const detail=clamp(1-d/radius,0,1)*staticDetail;
+    const d=Math.hypot(b.x-player.x,b.z-player.z); const detail=clamp(1-d/detailRadius,0,1)*staticDetail;
     const arr=builder.target(b.x,b.z);
-    pushBuilding(arr,b,detail);
-    if(detail>0.72 && (b.id%3===0)) pushStreetFurniture(arr,b.x+b.w*0.7,b.z+b.d*0.7,detail);
+    buildBuilding(G,arr,b,detail,seed,isNight);
+    if(detail>0.34) dressBuilding(G,arr,b,detail,seed,isNight);
     // Project a simple soft sun shadow on the local terrain; geometry, not a screen-space fake.
     if(d<720 && castShadows) {
       const ext=b.h/Math.max(0.18,sy);
@@ -640,21 +720,23 @@ function buildStaticScene() {
     if(t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ)return;
     if((counter++ % treeStep)!==0)return;
     const d=Math.hypot(t.x-player.x,t.z-player.z); if(adaptive && d>700 && hash2(t.x*0.01,t.z*0.01,seed)>0.42)return;
-    pushLowPolyTree(builder.target(t.x,t.z),t.x,terrainHeight(t.x,t.z,seed),t.z,t.s,t.type,t.seed);
+    buildTree(G,builder.target(t.x,t.z),t,clamp(1-d/detailRadius,0,1)*staticDetail,seed);
   });
   // River is a separate animated water surface with real depth-tested geometry.
-  for(const w of world.water){if(Math.abs(w.x-player.x)<radius+260 && Math.abs(w.z-player.z)<radius+260){const y=terrainHeight(w.x,w.z,seed)+0.15;const c=[0.06,0.22,0.32];pushBox(builder.target(w.x,w.z),w.x,y,w.z,w.w,0.04,w.d,c,c);}}
+  for(const w of world.water){if(Math.abs(w.x-player.x)<radius+260 && Math.abs(w.z-player.z)<radius+260){const y=terrainHeight(w.x,w.z,seed)+0.15;const c=[0.06,0.22,0.32];G.box(builder.target(w.x,w.z),w.x,y,w.z,w.w,0.04,w.d,c,G.M('terrain_mud'));}}
 
   const staticData = flattenCells(builder.cells);
   const shadowData = flattenCells(shadowBuilder.cells);
   gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf);gl.bufferData(gl.ARRAY_BUFFER,staticData.vertices,gl.STATIC_DRAW);
-  staticVertexCount=staticData.vertices.length/9;
+  staticVertexCount=staticData.vertices.length/VERTEX_FLOATS;
   staticChunks=staticData.runs;
-  gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,shadowData.vertices,gl.STATIC_DRAW);shadowVertexCount=shadowData.vertices.length/9;
+  gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,shadowData.vertices,gl.STATIC_DRAW);shadowVertexCount=shadowData.vertices.length/VERTEX_FLOATS;
+  staticBytes=staticData.vertices.byteLength;
   streamOps++; streamGenerated=streamResidency.generated; streamFreed=streamResidency.evicted;
   streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}`;
   if($('loading')) $('loading').style.display='none';
-  return performance.now()-t0;
+  staticBuildMs=performance.now()-t0;
+  return staticBuildMs;
 }
 
 function importanceOf(o) {
@@ -683,20 +765,32 @@ function buildDynamicScene(force=false) {
     const imp=importanceOf(n), st=ensureAgentState(n.id,n);
     const interval=adaptive?(imp>0.68?0.045:imp>0.42?0.12:imp>0.20?0.24:0.42):0.016;
     if(elapsed>=st.next){st.x=n.x;st.z=n.z;st.next=elapsed+interval;recomputed++;}else reused++;
-    pushNpc(arr,st.x,st.z,n.id,n.job,n.activity,imp);
+    // Visual LOD. A character is under ten pixels tall at sixty metres and a
+    // car under twenty at a hundred and fifty, so both drop detail well before
+    // they drop out of the world.
+    if(d<70) buildCharacter(G,arr,st.x,st.z,undefined,n.id,n.job,n.activity,elapsed*2+n.id*0.7,seed,0);
+    else if(d<260) buildCharacter(G,arr,st.x,st.z,undefined,n.id,n.job,n.activity,elapsed*2+n.id*0.7,seed,1);
+    else buildCharacterProxy(G,arr,st.x,st.z,undefined,n.id,n.job,n.activity,elapsed*2+n.id*0.7,seed);
     visibleObjects++;simulatedNpcCount++;
   }
-  for(const c of world.cars){const d=Math.hypot(c.x-player.x,c.z-player.z);if(d>carNear)continue;pushCar(arr,c);recomputed++;visibleObjects++;}
+  for(const c of world.cars){
+    const d=Math.hypot(c.x-player.x,c.z-player.z);if(d>carNear)continue;
+    if(d<160) buildCar(G,arr,c,seed,0);
+    else if(d<520) buildCar(G,arr,c,seed,1);
+    else buildCarProxy(G,arr,c,seed);
+    recomputed++;visibleObjects++;
+  }
   const y=terrainHeight(player.x,player.z,seed);
-  if(firstPerson) pushBox(arr,player.x,y,player.z,0.45,0.9,0.32,[0.18,0.32,0.68]);
-  else pushNpc(arr,player.x,player.z,9999,'service','idle',1);
+  if(firstPerson) G.box(arr,player.x,y,player.z,0.45,0.9,0.32,[0.18,0.32,0.68],G.M('fabric'));
+  else buildCharacter(G,arr,player.x,player.z,y,9999,'service','idle',elapsed*2,seed);
   if(currentMission){
     const stage=currentStage(currentMission);
-    if(stage&&Number.isFinite(stage.x)){const my=terrainHeight(stage.x,stage.z,seed);pushCylinder(arr,stage.x,my,stage.z,0.7,5.5,[0.95,0.68,0.25],8);pushCylinder(arr,stage.x,my+5.5,stage.z,1.2,0.08,[1.0,0.78,0.30],8);}
+    if(stage&&Number.isFinite(stage.x)){const my=terrainHeight(stage.x,stage.z,seed);G.cylinder(arr,stage.x,my,stage.z,0.7,5.5,[0.95,0.68,0.25],G.M('lamp'),8);G.cylinder(arr,stage.x,my+5.5,stage.z,1.2,0.08,[1.0,0.78,0.30],G.M('lamp'),8);}
   }
-  gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.DYNAMIC_DRAW);dynamicVertexCount=arr.length/9;
+  gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.DYNAMIC_DRAW);dynamicVertexCount=arr.length/VERTEX_FLOATS;
   dynamicBuildTime=elapsed;lastDynamicX=player.x;lastDynamicZ=player.z;dynamicBuilds++;lastDynamicObjects=visibleObjects;
-  return performance.now()-t0;
+  dynamicBuildMs=performance.now()-t0;
+  return dynamicBuildMs;
 }
 function shadowDraw(pv) {
   if(!shadowVertexCount) return;
@@ -729,7 +823,23 @@ function drawScene(){
   gl.bindVertexArray(vao);
   gl.uniformMatrix4fv(loc.uPV,false,pv); gl.uniform3f(loc.uCam,camera.x,camera.y,camera.z); gl.uniform1f(loc.uTime,elapsed);
   gl.uniform3f(loc.uSun,s.dir[0],s.dir[1],s.dir[2]); gl.uniform3f(loc.uFog,...fog); gl.uniform3f(loc.uAmbient,0.24+0.22*s.day,0.28+0.28*s.day,0.34+0.30*s.day); gl.uniform1f(loc.uFogDensity,world.weather===1?0.0000032:world.weather===2?0.0000025:0.0000018); gl.uniform1f(loc.uNight,night); gl.uniform1f(loc.uWater,0);
-  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24);
+  // Direct light is warm at low sun and neutral at noon; ambient is the sky
+  // above and the bounced ground below. Without the split, every surface in the
+  // world is lit by one colour and reads as a single flat wash.
+  const sunWarm=Math.max(0,1-sunState().day*1.35);
+  gl.uniform3f(loc.uSunColor,(0.95+0.55*sunWarm)*s.day,(0.94+0.12*sunWarm)*s.day,(0.90-0.16*sunWarm)*s.day);
+  gl.uniform3f(loc.uSkyColor,(0.30+0.34*s.day)*(1-night*0.72),(0.38+0.40*s.day)*(1-night*0.70),(0.52+0.44*s.day)*(1-night*0.60));
+  gl.uniform3f(loc.uGroundColor,(0.16+0.12*s.day)*(1-night*0.80),(0.15+0.11*s.day)*(1-night*0.80),(0.13+0.09*s.day)*(1-night*0.82));
+  gl.uniform4fv(loc.uMatA0,MATERIALS.a); gl.uniform4fv(loc.uMatB0,MATERIALS.b);
+  gl.uniform1f(loc.uMaterialsReady,materialState.ready?1:0);
+  // The sampler units are set once, not per frame: a unit assignment is a
+  // property of the program, and setting it every frame is a way for a
+  // rebind elsewhere to quietly point the shader at the wrong array.
+  bindMaterialTextures();
+  gl.uniform1i(loc.uAlbedoTex,UNITS.albedo);
+  gl.uniform1i(loc.uNormalTex,UNITS.normal);
+  gl.uniform1i(loc.uArmTex,UNITS.arm);
+  gl.bindBuffer(gl.ARRAY_BUFFER,staticBuf); setAttributePointers();
   // Frustum-cull the static cells. Each run is a contiguous slice of the one
   // static buffer, so a rejected cell costs a plane test and nothing else: no
   // rebind, no re-upload, no per-object draw call. The whole point is that a
@@ -745,7 +855,7 @@ function drawScene(){
     visibleChunks++; submittedStaticVertices+=run.count; visibleChunkKeys.push(run.key);
   }
   shadowDraw(pv);
-  gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf); gl.vertexAttribPointer(0,3,gl.FLOAT,false,36,0); gl.vertexAttribPointer(1,3,gl.FLOAT,false,36,12); gl.vertexAttribPointer(2,3,gl.FLOAT,false,36,24); gl.drawArrays(gl.TRIANGLES,0,dynamicVertexCount);
+  gl.bindBuffer(gl.ARRAY_BUFFER,dynamicBuf); setAttributePointers(); gl.drawArrays(gl.TRIANGLES,0,dynamicVertexCount);
   gl.bindVertexArray(null);
   renderMs=performance.now()-t0;
 }
@@ -1298,6 +1408,9 @@ function newWorld(nextSeed){
 }
 
 function startGame(load=true){
+  // The material upload is started once and survives world regeneration, since
+  // the textures do not depend on the seed.
+  if (!materialUpload) startMaterialUpload();
   const stored=load?(()=>{try{return JSON.parse(localStorage.getItem(SAVE_KEY)||'null')}catch(e){return null}})():null;
   const chosen=load ? (stored?.seed??WORLD_SEED_DEFAULT) : (Number.isFinite(BENCH_SEED)&&BENCH_SEED>0 ? BENCH_SEED : WORLD_SEED_DEFAULT); seed=chosen>>>0;rand=rng(seed);world=generateWorld(seed);
   player={x:4800,z:4800,y:terrainHeight(4800,4800,seed),money:120,energy:100,discoveries:0,speed:0,missionsCompleted:0,rank:1,grounded:true};
@@ -1406,6 +1519,7 @@ globalThis.EMERGENT = {
       visibleChunkKeys: visibleChunkKeys.slice(),
       recomputed, reused, visibleObjects, simulatedNpcCount, streamOps,
       streamGenerated, streamFreed, residentChunks: streamResidency.active.size,
+      staticBuildMs, dynamicBuildMs, staticBytes, materialLayers: MATERIALS.count,
       lastViewProjection: lastPV
     };
   },
@@ -1421,6 +1535,17 @@ globalThis.EMERGENT = {
    * Rebinding through this object is the real code path a controls screen uses.
    */
   get input() { return input; },
+  /**
+   * The live material table.
+   *
+   * Exposed so a test can check that the material indices the geometry actually
+   * carries resolve to real materials. A vertex whose index is out of range
+   * samples the wrong texture layer, which reads as a wall wearing the road's
+   * asphalt and is otherwise invisible.
+   */
+  get materials() { return { count: MATERIALS.count, byId: MATERIALS.byId, size: MATERIALS.size, layers: MATERIALS.layers }; },
+  /** Whether the baked textures finished uploading. */
+  get materialState() { return { ready: materialState.ready, loaded: materialState.loaded, total: materialState.total, failed: materialState.failed.slice() }; },
   /** Camera state, so mouse look can be asserted without reading the matrix. */
   get view() { return { yaw, pitch, pointerLocked, firstPerson }; },
   /** Move the player instantly to a world position (tests / manual QA). */

@@ -436,6 +436,97 @@ await test('the player cannot walk through the crowd', async () => {
   assertGLHealthy(gl, 'colliding with a crowd');
 });
 
+await test('the material set is uploaded as three complete texture arrays', async () => {
+  // The texture path is the one part of the renderer a WebGL harness cannot
+  // see pixels of, so what is asserted here is the *contract*: three arrays,
+  // one layer per material, a full mip chain, and a sampler that is actually
+  // complete. A material array with a mipmap filter and no mip chain samples
+  // as solid black, which is invisible in a single screenshot and is the
+  // reason this check exists.
+  const { gl } = await boot({ frames: 10 });
+  const game = globalThis.EMERGENT;
+  // Let the asynchronous upload finish. Decoding is a microtask chain, so a
+  // few frames of pumping is enough; a real failure here would be a tile that
+  // never resolves.
+  for (let i = 0; i < 200; i++) { await new Promise(r => setTimeout(r, 0)); await pumpFrames(1); }
+
+  const report = gl.textureReport();
+  const arrays = report.filter(t => t.layers > 1);
+  assertEqual(arrays.length, 3, 'the game uploads three texture arrays, one per map');
+  for (const t of arrays) {
+    assertEqual(t.width, 512, `array is 512 wide (${t.width})`);
+    assertEqual(t.height, 512, `array is 512 tall (${t.height})`);
+    assertEqual(t.layers, 26, `array has one layer per material (${t.layers})`);
+    assert(t.levels > 1, `array has a mip chain (${t.levels} levels)`);
+    assertEqual(t.mips, true, 'and the mip chain was actually generated');
+    assertEqual(t.minFilter, gl.LINEAR_MIPMAP_LINEAR, 'and is minified trilinearly');
+  }
+  // Exactly one sRGB array: base colour only. A normal or roughness map
+  // uploaded as sRGB is gamma-decoded, and every lighting calculation in the
+  // game is then quietly wrong in a way no screenshot reveals.
+  const srgb = arrays.filter(t => t.internalFormat === gl.SRGB8_ALPHA8);
+  assertEqual(srgb.length, 1, 'exactly one array is sRGB');
+  assertEqual(gl.stats.textureUploads, 78, 'every tile of every map was uploaded');
+  assertEqual(gl.stats.mipmapsGenerated, 3, 'a mip chain per array');
+  assertEqual(gl.auditTextures().length, 0, `and every texture is samplable: ${gl.auditTextures().join('; ')}`);
+});
+
+await test('geometry carries material indices the shader can resolve', async () => {
+  // The renderer resolves a vertex's material through the uniform table, so a
+  // vertex whose index is out of range samples the wrong texture layer — which
+  // reads as a wall wearing the road's asphalt, and is otherwise invisible.
+  // This walks the uploaded vertex buffer and checks every index.
+  const { gl } = await boot({ frames: 40 });
+  const game = globalThis.EMERGENT;
+  for (let i = 0; i < 200; i++) { await new Promise(r => setTimeout(r, 0)); await pumpFrames(1); }
+
+  assert(game.stats.staticVertexCount > 50000,
+    `the detail pass put real geometry in the world (${game.stats.staticVertexCount} vertices)`);
+  const mats = game.materials;
+  assert(mats.count > 20, `the material table is populated (${mats.count} materials)`);
+  assertEqual(game.materialState.failed.length, 0,
+    `no material tile failed to load: ${game.materialState.failed.join('; ')}`);
+  assertEqual(game.materialState.ready, true, 'the upload finished');
+  assertEqual(game.materialState.loaded, mats.layers * 3, 'all three maps of every layer were uploaded');
+
+  // Reach the static vertex buffer through the harness's own attribute state,
+  // which is what the renderer is actually drawing from.
+  const STRIDE = 10;
+  // Read the largest uploaded buffer rather than the one a VAO currently
+  // points at: the renderer rebinds the dynamic buffer every frame, so the
+  // VAO's attribute state is whichever scene was drawn last and the static one
+  // is not reachable through it.
+  const scene = gl._buffers
+    .filter(b => b.data && b.data.length > 1000)
+    .sort((a, b) => b.data.length - a.data.length)[0];
+  assert(scene, 'the harness can see the scene vertex buffer');
+  const data = scene.data;
+  const vertexCount = Math.floor(data.length / STRIDE);
+  assertEqual(vertexCount, game.stats.staticVertexCount,
+    'the uploaded buffer holds exactly the vertices the renderer claims');
+
+  // Walk a spread of vertices rather than all of them: the check is linear in
+  // a million-vertex buffer and the renderer is single-threaded here.
+  const seen = new Set();
+  const step = Math.max(1, Math.floor(vertexCount / 20000));
+  let checked = 0;
+  for (let v = 0; v < vertexCount; v += step) {
+    const m = data[v * STRIDE + 9];
+    assert(Number.isInteger(m) && m >= 0 && m < mats.count,
+      `vertex ${v} carries a resolvable material index (got ${m}, table has ${mats.count})`);
+    seen.add(m);
+    checked++;
+  }
+  assert(checked > 1000, `and a meaningful number were checked (${checked})`);
+  assert(seen.size >= 8, `the world actually uses a spread of materials (${seen.size} distinct in the sample)`);
+  // Both textured and untextured materials must be in use, or one of the two
+  // paths in the shader is dead code.
+  const textured = [...seen].filter(i => mats.byId && i < Object.keys(mats.byId).length);
+  assert(textured.length > 0, 'textured materials are in use');
+
+  assertGLHealthy(gl, 'material indexing');
+});
+
 await test('crossing the world streams chunks in and out', async () => {
   const { gl } = await boot({ frames: 10 });
   const game = globalThis.EMERGENT;

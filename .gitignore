@@ -31,3 +31,8 @@ node_modules/
 *.swp
 .idea/
 .vscode/
+
+# Downloaded source assets. Provenance is committed; the bytes are not.
+# Recreate with `npm run assets:fetch`.
+assets/source/
+assets/.cache/

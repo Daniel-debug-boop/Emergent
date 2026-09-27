@@ -16,7 +16,7 @@
  *
  * Usage: `node tools/build.mjs`
  */
-import { mkdir, copyFile, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,7 +27,21 @@ const OUT = path.join(ROOT, 'dist');
 // Every module the shipped page imports. Kept explicit rather than globbed: a
 // glob would silently ship test files and scratch scripts, and a missing entry
 // is a runtime 404 in the browser that no build step would report.
-const FILES = ['index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs', 'physics.mjs', 'missions.mjs', 'input.mjs'];
+const FILES = [
+  'index.html', 'game3d.js', 'world.mjs', 'math3d.mjs', 'culling.mjs',
+  'physics.mjs', 'missions.mjs', 'input.mjs', 'geometry.mjs', 'city.mjs',
+  'materials.mjs', 'textures.mjs'
+];
+
+/**
+ * Directories copied wholesale, as [source relative to ROOT, destination].
+ *
+ * The baked material set is a directory rather than a list of 79 names
+ * precisely so that adding a material does not mean editing the build: the
+ * manifest is derived from what the bake produced, and the dist-boot test fails
+ * if the descriptor the game imports is not among the files that shipped.
+ */
+const ASSET_DIRS = [['assets/textures', 'assets/textures']];
 
 /**
  * Third-party modules, as [source relative to ROOT, destination in dist].
@@ -77,6 +91,18 @@ async function build() {
   for (const file of FILES) {
     await copyFile(path.join(ROOT, file), path.join(OUT, file));
     emitted.push(file);
+  }
+  for (const [from, to] of ASSET_DIRS) {
+    const source = path.join(ROOT, from);
+    const names = await readdir(source);
+    if (!names.includes('materials.mjs')) {
+      throw new Error(`${from} has no materials.mjs — the game's static import of the descriptor would 404`);
+    }
+    await mkdir(path.join(OUT, to), { recursive: true });
+    for (const name of names) {
+      await copyFile(path.join(source, name), path.join(OUT, to, name));
+      emitted.push(`${to}/${name}`);
+    }
   }
   for (const [source, dest] of VENDOR) {
     const from = path.join(ROOT, source);

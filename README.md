@@ -208,9 +208,98 @@ streaming under
 teleport, every quality level, both renderer modes, a full delivery mission, and
 save/load including rejection of a save from a different world.
 
+## Assets, materials and the detail kit
+
+EMERGENT had no textures at all before this pass. The vertex format was
+position, normal and colour and the fragment shader was a Lambert term, so every
+surface in the world was a flat colour. There is now a full asset pipeline, and
+it is the same pipeline the project already had — extended, not replaced.
+
+**Acquisition.** `assets/database.mjs` is a hand-curated list of 26 materials,
+each with a written reason it belongs in this city. Nothing is downloaded
+blindly. `tools/assets/fetch.mjs` pulls them from Poly Haven, verifies each file
+against the provider's own published MD5, and writes `assets/provenance.json`
+with the source URL, the named creator, the licence and the fetch date.
+
+**Processing.** `tools/assets/bake.mjs` resamples to a uniform 512px, packs
+AO/roughness/metalness into one array, and — before it will accept a material —
+validates channel order, seam continuity, albedo degeneracy and the declared
+metalness against the provider's own measurements. It rejected six materials
+from the first cut:
+
+- three genuinely did not tile (`stone_tile_wall` at 10.2x its interior edge
+  difference, `wood_plank_wall` at 7.8x, `wood_planks` at 8.3x) and were replaced
+  with measured alternatives;
+- three declared a metalness their own maps contradicted — rusted iron measures
+  0.001 metallic, correctly, because rust is an oxide and an oxide is a
+  dielectric. The database was wrong, not the texture.
+
+**Legal.** Every asset is CC0 and every one is named in the manifest.
+`tools/assets/audit.mjs` runs in CI and fails the build if any asset stops being
+CC0, loses its provenance, is unreferenced, or is referenced but absent from
+`dist/`. Redistribution rights are checked, not assumed.
+
+**Runtime.** `materials.mjs` merges the 26 baked materials with 17 untextured
+PBR surfaces into one index space uploaded as two uniform arrays, so the shader
+has a single code path. Texture coordinates are world-planar box mapping derived
+in the vertex shader from the material's recorded role — no seams, no
+unwrapping, no UV attribute, and world-locked so a brick wall's bricks stay put
+while the player walks past.
+
+The shader is a GGX + Smith microfacet BRDF: dielectric and metal reflectance
+mixed per material, a hemispherical sky/ground ambient so a shaded wall is not
+black, an environment term through a roughness-aware Fresnel, and emissive
+strength for lit windows and lamps. Moving geometry deliberately uses solid
+materials, because a world-locked projection on a car at 20 m/s slides its paint
+across its own body.
+
+**Geometry.** `geometry.mjs` is a detail kit: window units with reveals, frames,
+transoms and sills; doors with steps and awnings; cornices, parapets, gable and
+sawtooth roofs; fire escapes; street lamps with arms over the carriageway;
+traffic lights; containers, pallets, crates, bins, hydrants, benches, shelters.
+`city.mjs` composes it per building and per road. The kit is the single vertex
+emission point, so a material index passed into a colour argument is a throw,
+not a silently wrong vertex.
+
+**Measured here:**
+
+| | naive detail | with LOD |
+|---|---|---|
+| Static vertices | 1,420,680 | 218,226 |
+| Static buffer | 54.2 MB | 8.3 MB |
+| Static build | 668 ms | 99 ms |
+| Dynamic build | 10.11 ms | 2.79 ms |
+
+### The shader, and why it has its own test suites
+
+The whole material system once ran fully green against a fragment shader that
+read only position, normal and colour. The textures were decoded, uploaded and
+bound every frame and never sampled; the material index was uploaded as vertex
+attribute 3 and never read. Every test passed, because every test asserted the
+*upload* — which was fine — rather than that anything was drawn with it.
+
+The harness cannot catch that class of bug, and cannot catch a GLSL syntax error
+either, because it stores shader source and reports `COMPILE_STATUS` true for
+everything. So there are two suites that can:
+
+- `test_shaders.mjs` parses all four shaders with `@shaderfrog/glsl-parser` and
+  asserts the wiring in both directions — every uniform the renderer sets is
+  declared in a shader, and every uniform a shader declares is set — plus that
+  the vertex shader reads all four attributes the buffers upload.
+- `test_shading.mjs` transliterates the BRDF into JS and asserts its behaviour,
+  because a shader that parses can still be wrong. Lambert's cosine law, the
+  specular lobe actually widening with roughness rather than merely dimming,
+  4% dielectric reflectance against a metal's albedo, and a 7,776-case sweep
+  for non-finite or negative output.
+
+`docs/ASSET_PIPELINE.md` is the full reference, including the harness texture
+model, what it cannot verify, and what is not done: no interiors, no downloaded
+models, no decals, no triplanar terrain blending, no vegetation impostors, and
+no measured frame rate.
+
 ## Current limitations
 
-The game remains intentionally stylized and low-poly. The strongest remaining technical gaps are full navmesh/pathfinding, more sophisticated intersection traffic logic, true GPU-time instrumentation, advanced PBR materials/reflections, interior traversal, and pixel-level temporal reprojection. Those are not represented as completed features.
+The world is no longer untextured primitives: 26 curated CC0 PBR materials are processed, validated and shipped as three texture arrays, and the buildings, roads, vehicles, street furniture and vegetation are built from a detail kit of real small solids with distance LOD. The strongest remaining gaps are full navmesh/pathfinding, more sophisticated intersection traffic logic, true GPU-time instrumentation, screen-space reflections, interior traversal, and pixel-level temporal reprojection. Those are not represented as completed features.
 
 Two specific known gaps in what is built:
 
@@ -223,8 +312,9 @@ Two specific known gaps in what is built:
 - **Shadows are projected quads, not a shadow map.** They are real geometry
   depth-tested against the terrain, so they are correct as a shadow *shape*,
   but they do not fall on other buildings and cannot self-shadow. A real
-  shadow map is blocked on the headless harness, which models no textures or
-  framebuffers at all — see `tools/headless_runtime.mjs`.
+  shadow map is blocked on the headless harness, which now models and validates
+  textures but still models no framebuffers or renderbuffers — see
+  `tools/headless_runtime.mjs`.
 
 On-device FPS, GPU time and VRAM are still unmeasured: the runtime is verified headlessly, but a real GPU measurement path must be validated on the target device before any of those numbers are quoted.
 
@@ -382,7 +472,7 @@ The engine instruments its real subsystems and writes `emergent_profile.json` on
 ### What is not integrated, and why
 
 - **The Forge** — not integrated. It is a full rendering framework with its own RHI, windowing and build system. EMERGENT's renderer is raw Vulkan + Volk + VMA, and swapping in The Forge would be a replacement of the renderer, not an addition to it.
-- **KTX / Basis Universal** — not integrated. A compressed-texture path needs authored `.ktx2` assets to decode; the tree has no texture assets and no GPU here to validate an upload against, so a KTX integration would be a decoder with nothing to decode. Not claimed.
+- **KTX / Basis Universal** — not integrated natively. The web build ships uncompressed RGBA8 arrays: a browser cannot transcode Basis at load time without a WASM decoder, and shipping 78 uncompressed tiles already costs 17.4 MB. This is the right trade for the web target and the wrong one for a native shipping build, where GPU-compressed BCn plus a real `ktx2` path is required. Not claimed either way here.
 - **Slang** — not integrated. It is a shading-language compiler, and the two compute shaders in `native/shaders/` are GLSL compiled by the driver at load time. There is no offline shader-compilation step to replace, and no GPU to validate generated SPIR-V against. Not claimed.
 
 ### Vulkan runtime status

@@ -1,0 +1,759 @@
+{
+  "generated": "2026-09-27T03:36:16.425Z",
+  "materials": [
+    {
+      "id": "road_asphalt",
+      "layer": 0,
+      "role": "road surface",
+      "tier": "hero",
+      "tileScale": 5,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/asphalt_02",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "2k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 89.6,
+        "albedoStddev": 16.1,
+        "seamRatio": 1.16,
+        "armAo": 0.72,
+        "armRoughness": 0.77,
+        "armMetallic": 0.013,
+        "normalBlue": 0.973
+      },
+      "bytes": 769121
+    },
+    {
+      "id": "road_asphalt_worn",
+      "layer": 1,
+      "role": "worn road surface, patched roads",
+      "tier": "standard",
+      "tileScale": 5,
+      "roughness": 1.05,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/worn_asphalt",
+        "creator": "Amal Kumar (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 58.6,
+        "albedoStddev": 10.1,
+        "seamRatio": 1.06,
+        "armAo": 0.641,
+        "armRoughness": 0.875,
+        "armMetallic": 0.013,
+        "normalBlue": 0.891
+      },
+      "bytes": 773058
+    },
+    {
+      "id": "pavement_concrete",
+      "layer": 2,
+      "role": "sidewalk, plaza paving",
+      "tier": "standard",
+      "tileScale": 2.5,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/concrete_pavement_02",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 124.5,
+        "albedoStddev": 12.1,
+        "seamRatio": 1.52,
+        "armAo": 0.917,
+        "armRoughness": 0.784,
+        "armMetallic": 0.003,
+        "normalBlue": 0.943
+      },
+      "bytes": 730747
+    },
+    {
+      "id": "pavement_pavers",
+      "layer": 3,
+      "role": "plaza, courtyard, old street paving",
+      "tier": "standard",
+      "tileScale": 2,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/concrete_pavers_02",
+        "creator": "Amal Kumar (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 98.6,
+        "albedoStddev": 10.9,
+        "seamRatio": 2.51,
+        "armAo": 0.951,
+        "armRoughness": 0.874,
+        "armMetallic": 0.001,
+        "normalBlue": 0.98
+      },
+      "bytes": 629492
+    },
+    {
+      "id": "street_cobble",
+      "layer": 4,
+      "role": "old district street",
+      "tier": "standard",
+      "tileScale": 2.5,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/cobblestone_03",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 102.7,
+        "albedoStddev": 25.5,
+        "seamRatio": 1.21,
+        "armAo": 0.818,
+        "armRoughness": 0.922,
+        "armMetallic": 0.004,
+        "normalBlue": 0.959
+      },
+      "bytes": 761238
+    },
+    {
+      "id": "ground_gravel",
+      "layer": 5,
+      "role": "road shoulder, yards, hardstanding",
+      "tier": "standard",
+      "tileScale": 1.6,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/bicolour_gravel",
+        "creator": "Dimitrios Savva (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 104.6,
+        "albedoStddev": 29,
+        "seamRatio": 1.09,
+        "armAo": 0.757,
+        "armRoughness": 0.792,
+        "armMetallic": 0.013,
+        "normalBlue": 0.898
+      },
+      "bytes": 781536
+    },
+    {
+      "id": "wall_brick",
+      "layer": 6,
+      "role": "brick facade",
+      "tier": "hero",
+      "tileScale": 2.2,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/brick_wall_006",
+        "creator": "Jan Burghardt (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "2k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 125.9,
+        "albedoStddev": 28,
+        "seamRatio": 2.07,
+        "armAo": 0.838,
+        "armRoughness": 0.787,
+        "armMetallic": 0.001,
+        "normalBlue": 0.962
+      },
+      "bytes": 714834
+    },
+    {
+      "id": "wall_brick_dark",
+      "layer": 7,
+      "role": "dark brick, soot-stained brick",
+      "tier": "standard",
+      "tileScale": 2.2,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/brick_wall_10",
+        "creator": "Dimitrios Savva (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 55.7,
+        "albedoStddev": 20.5,
+        "seamRatio": 1.18,
+        "armAo": 0.846,
+        "armRoughness": 0.787,
+        "armMetallic": 0.004,
+        "normalBlue": 0.974
+      },
+      "bytes": 674018
+    },
+    {
+      "id": "wall_plaster",
+      "layer": 8,
+      "role": "rendered plaster facade",
+      "tier": "standard",
+      "tileScale": 2.6,
+      "roughness": 0.95,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/white_plaster_02",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 135.7,
+        "albedoStddev": 9.6,
+        "seamRatio": 1.53,
+        "armAo": 0.673,
+        "armRoughness": 0.907,
+        "armMetallic": 0.007,
+        "normalBlue": 0.989
+      },
+      "bytes": 751978
+    },
+    {
+      "id": "wall_plaster_dirty",
+      "layer": 9,
+      "role": "weathered plaster, back alley",
+      "tier": "standard",
+      "tileScale": 2.6,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/plastered_wall_03",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 126.5,
+        "albedoStddev": 7.4,
+        "seamRatio": 1.15,
+        "armAo": 0.998,
+        "armRoughness": 0.911,
+        "armMetallic": 0.001,
+        "normalBlue": 0.997
+      },
+      "bytes": 580395
+    },
+    {
+      "id": "wall_concrete",
+      "layer": 10,
+      "role": "concrete panel facade, retaining walls",
+      "tier": "standard",
+      "tileScale": 3,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/concrete_wall_005",
+        "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 97.1,
+        "albedoStddev": 4.5,
+        "seamRatio": 1.16,
+        "armAo": 0.945,
+        "armRoughness": 0.799,
+        "armMetallic": 0.002,
+        "normalBlue": 0.991
+      },
+      "bytes": 642203
+    },
+    {
+      "id": "wall_painted_concrete",
+      "layer": 11,
+      "role": "painted render, coloured facade",
+      "tier": "standard",
+      "tileScale": 3,
+      "roughness": 0.9,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/painted_concrete",
+        "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 96.7,
+        "albedoStddev": 24.6,
+        "seamRatio": 0.67,
+        "armAo": 0.75,
+        "armRoughness": 0.772,
+        "armMetallic": 0.007,
+        "normalBlue": 0.994
+      },
+      "bytes": 704475
+    },
+    {
+      "id": "wall_stone",
+      "layer": 12,
+      "role": "stone cladding, institutional buildings",
+      "tier": "standard",
+      "tileScale": 2.4,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/sandstone_blocks_05",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 157.8,
+        "albedoStddev": 32,
+        "seamRatio": 0.93,
+        "armAo": 0.861,
+        "armRoughness": 0.833,
+        "armMetallic": 0.005,
+        "normalBlue": 0.962
+      },
+      "bytes": 720460
+    },
+    {
+      "id": "wall_siding",
+      "layer": 13,
+      "role": "weathered timber siding",
+      "tier": "standard",
+      "tileScale": 2,
+      "roughness": 0.95,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/wood_planks_grey",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 68.1,
+        "albedoStddev": 12.5,
+        "seamRatio": 2.8,
+        "armAo": 0.978,
+        "armRoughness": 0.843,
+        "armMetallic": 0.006,
+        "normalBlue": 0.987
+      },
+      "bytes": 676804
+    },
+    {
+      "id": "wall_metal_shutter",
+      "layer": 14,
+      "role": "roller shutter, industrial cladding",
+      "tier": "standard",
+      "tileScale": 2.4,
+      "roughness": 0.75,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/painted_metal_shutter",
+        "creator": "Dario Barresi (Baking), Rico Cilliers (Processing ), Charlotte Baglioni (Photography)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 130.6,
+        "albedoStddev": 13.3,
+        "seamRatio": 1.35,
+        "armAo": 0.881,
+        "armRoughness": 0.633,
+        "armMetallic": 0.004,
+        "normalBlue": 0.962
+      },
+      "bytes": 516508
+    },
+    {
+      "id": "wall_corrugated",
+      "layer": 15,
+      "role": "corrugated iron, warehouse, shed",
+      "tier": "standard",
+      "tileScale": 2.4,
+      "roughness": 0.8,
+      "metallic": 0.2,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/rusty_corrugated_iron",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 49.6,
+        "albedoStddev": 13.3,
+        "seamRatio": 0.4,
+        "armAo": 0.81,
+        "armRoughness": 0.936,
+        "armMetallic": 0.002,
+        "normalBlue": 0.934
+      },
+      "bytes": 686616
+    },
+    {
+      "id": "metal_rust",
+      "layer": 16,
+      "role": "rusted steel, exposed structure",
+      "tier": "standard",
+      "tileScale": 1.4,
+      "roughness": 0.85,
+      "metallic": 0.25,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/rusty_metal_02",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 145.7,
+        "albedoStddev": 22.5,
+        "seamRatio": 0.92,
+        "armAo": 0.767,
+        "armRoughness": 0.423,
+        "armMetallic": 0.005,
+        "normalBlue": 0.996
+      },
+      "bytes": 731773
+    },
+    {
+      "id": "metal_plate",
+      "layer": 17,
+      "role": "steel plate, containers, machinery",
+      "tier": "minor",
+      "tileScale": 1.6,
+      "roughness": 0.6,
+      "metallic": null,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/metal_plate_02",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 74.3,
+        "albedoStddev": 7.8,
+        "seamRatio": 1.26,
+        "armAo": 0.958,
+        "armRoughness": 0.659,
+        "armMetallic": 0.911,
+        "normalBlue": 0.997
+      },
+      "bytes": 580129
+    },
+    {
+      "id": "terrain_grass",
+      "layer": 18,
+      "role": "grass, parkland",
+      "tier": "hero",
+      "tileScale": 9,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/grass_ground",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "2k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 96.7,
+        "albedoStddev": 7.4,
+        "seamRatio": 1,
+        "armAo": 0.798,
+        "armRoughness": 0.937,
+        "armMetallic": 0.002,
+        "normalBlue": 0.88
+      },
+      "bytes": 770684
+    },
+    {
+      "id": "terrain_dirt",
+      "layer": 19,
+      "role": "bare earth, worn ground, verges",
+      "tier": "standard",
+      "tileScale": 6,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/dirt",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 84.3,
+        "albedoStddev": 6.5,
+        "seamRatio": 1.08,
+        "armAo": 0.896,
+        "armRoughness": 0.944,
+        "armMetallic": 0.003,
+        "normalBlue": 0.959
+      },
+      "bytes": 741130
+    },
+    {
+      "id": "terrain_mud",
+      "layer": 20,
+      "role": "mud, wet ground, construction ground",
+      "tier": "standard",
+      "tileScale": 5,
+      "roughness": 0.75,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/mud_forest",
+        "creator": "eye-candy.xyz (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 38.7,
+        "albedoStddev": 16.2,
+        "seamRatio": 1.18,
+        "armAo": 0.837,
+        "armRoughness": 0.918,
+        "armMetallic": 0.005,
+        "normalBlue": 0.886
+      },
+      "bytes": 750743
+    },
+    {
+      "id": "terrain_rock",
+      "layer": 21,
+      "role": "rocky ground, scree, cliff foot",
+      "tier": "standard",
+      "tileScale": 7,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/rock_ground_02",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 107.7,
+        "albedoStddev": 28.1,
+        "seamRatio": 1.16,
+        "armAo": 0.399,
+        "armRoughness": 0.813,
+        "armMetallic": 0.015,
+        "normalBlue": 0.874
+      },
+      "bytes": 772072
+    },
+    {
+      "id": "terrain_sand",
+      "layer": 22,
+      "role": "beach, dry verge, construction sand",
+      "tier": "minor",
+      "tileScale": 6,
+      "roughness": 1,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/sand_02",
+        "creator": "Charlotte Baglioni (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 87,
+        "albedoStddev": 7.8,
+        "seamRatio": 1.09,
+        "armAo": 0.92,
+        "armRoughness": 0.84,
+        "armMetallic": 0.002,
+        "normalBlue": 0.926
+      },
+      "bytes": 733238
+    },
+    {
+      "id": "floor_concrete",
+      "layer": 23,
+      "role": "warehouse and shop floor",
+      "tier": "minor",
+      "tileScale": 2.4,
+      "roughness": 0.9,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/concrete_floor_01",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 108.4,
+        "albedoStddev": 21.8,
+        "seamRatio": 1.04,
+        "armAo": 0.814,
+        "armRoughness": 0.525,
+        "armMetallic": 0.007,
+        "normalBlue": 0.982
+      },
+      "bytes": 759477
+    },
+    {
+      "id": "floor_wood",
+      "layer": 24,
+      "role": "residential and cafe floor",
+      "tier": "minor",
+      "tileScale": 1.6,
+      "roughness": 0.7,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/plank_flooring",
+        "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography), Rico Cilliers (Tiling)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 86.5,
+        "albedoStddev": 18,
+        "seamRatio": 0.68,
+        "armAo": 0.951,
+        "armRoughness": 0.377,
+        "armMetallic": 0.003,
+        "normalBlue": 0.998
+      },
+      "bytes": 659133
+    },
+    {
+      "id": "floor_tile",
+      "layer": 25,
+      "role": "commercial floor, bathroom, kitchen",
+      "tier": "minor",
+      "tileScale": 1.2,
+      "roughness": 0.45,
+      "metallic": 0,
+      "provenance": {
+        "source": "Poly Haven",
+        "source_url": "https://polyhaven.com/a/large_grey_tiles",
+        "creator": "Rob Tuytel (All)",
+        "license": "CC0",
+        "license_url": "https://polyhaven.com/license",
+        "original_format": "jpeg",
+        "source_resolution": "1k",
+        "fetched": "2026-09-27"
+      },
+      "measured": {
+        "albedoMeanLuma": 126.7,
+        "albedoStddev": 22.8,
+        "seamRatio": 1.19,
+        "armAo": 0.778,
+        "armRoughness": 0.815,
+        "armMetallic": 0.007,
+        "normalBlue": 0.99
+      },
+      "bytes": 660982
+    }
+  ]
+}

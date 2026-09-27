@@ -1,0 +1,362 @@
+{
+  "version": 1,
+  "generated": "2026-09-27T03:36:16.425Z",
+  "size": 512,
+  "arrays": {
+    "albedo": {
+      "internalFormat": "SRGB8_ALPHA8",
+      "format": "RGBA",
+      "type": "UNSIGNED_BYTE",
+      "srgb": true,
+      "layers": 26
+    },
+    "normal": {
+      "internalFormat": "RGBA8",
+      "format": "RGBA",
+      "type": "UNSIGNED_BYTE",
+      "srgb": false,
+      "layers": 26
+    },
+    "arm": {
+      "internalFormat": "RGBA8",
+      "format": "RGBA",
+      "type": "UNSIGNED_BYTE",
+      "srgb": false,
+      "layers": 26
+    }
+  },
+  "materials": {
+    "road_asphalt": {
+      "layer": 0,
+      "tileScale": 5,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "road surface",
+      "maps": {
+        "albedo": "assets/textures/road_asphalt_albedo.png",
+        "normal": "assets/textures/road_asphalt_normal.png",
+        "arm": "assets/textures/road_asphalt_arm.png"
+      }
+    },
+    "road_asphalt_worn": {
+      "layer": 1,
+      "tileScale": 5,
+      "roughness": 1.05,
+      "metallic": 0,
+      "role": "worn road surface, patched roads",
+      "maps": {
+        "albedo": "assets/textures/road_asphalt_worn_albedo.png",
+        "normal": "assets/textures/road_asphalt_worn_normal.png",
+        "arm": "assets/textures/road_asphalt_worn_arm.png"
+      }
+    },
+    "pavement_concrete": {
+      "layer": 2,
+      "tileScale": 2.5,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "sidewalk, plaza paving",
+      "maps": {
+        "albedo": "assets/textures/pavement_concrete_albedo.png",
+        "normal": "assets/textures/pavement_concrete_normal.png",
+        "arm": "assets/textures/pavement_concrete_arm.png"
+      }
+    },
+    "pavement_pavers": {
+      "layer": 3,
+      "tileScale": 2,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "plaza, courtyard, old street paving",
+      "maps": {
+        "albedo": "assets/textures/pavement_pavers_albedo.png",
+        "normal": "assets/textures/pavement_pavers_normal.png",
+        "arm": "assets/textures/pavement_pavers_arm.png"
+      }
+    },
+    "street_cobble": {
+      "layer": 4,
+      "tileScale": 2.5,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "old district street",
+      "maps": {
+        "albedo": "assets/textures/street_cobble_albedo.png",
+        "normal": "assets/textures/street_cobble_normal.png",
+        "arm": "assets/textures/street_cobble_arm.png"
+      }
+    },
+    "ground_gravel": {
+      "layer": 5,
+      "tileScale": 1.6,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "road shoulder, yards, hardstanding",
+      "maps": {
+        "albedo": "assets/textures/ground_gravel_albedo.png",
+        "normal": "assets/textures/ground_gravel_normal.png",
+        "arm": "assets/textures/ground_gravel_arm.png"
+      }
+    },
+    "wall_brick": {
+      "layer": 6,
+      "tileScale": 2.2,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "brick facade",
+      "maps": {
+        "albedo": "assets/textures/wall_brick_albedo.png",
+        "normal": "assets/textures/wall_brick_normal.png",
+        "arm": "assets/textures/wall_brick_arm.png"
+      }
+    },
+    "wall_brick_dark": {
+      "layer": 7,
+      "tileScale": 2.2,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "dark brick, soot-stained brick",
+      "maps": {
+        "albedo": "assets/textures/wall_brick_dark_albedo.png",
+        "normal": "assets/textures/wall_brick_dark_normal.png",
+        "arm": "assets/textures/wall_brick_dark_arm.png"
+      }
+    },
+    "wall_plaster": {
+      "layer": 8,
+      "tileScale": 2.6,
+      "roughness": 0.95,
+      "metallic": 0,
+      "role": "rendered plaster facade",
+      "maps": {
+        "albedo": "assets/textures/wall_plaster_albedo.png",
+        "normal": "assets/textures/wall_plaster_normal.png",
+        "arm": "assets/textures/wall_plaster_arm.png"
+      }
+    },
+    "wall_plaster_dirty": {
+      "layer": 9,
+      "tileScale": 2.6,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "weathered plaster, back alley",
+      "maps": {
+        "albedo": "assets/textures/wall_plaster_dirty_albedo.png",
+        "normal": "assets/textures/wall_plaster_dirty_normal.png",
+        "arm": "assets/textures/wall_plaster_dirty_arm.png"
+      }
+    },
+    "wall_concrete": {
+      "layer": 10,
+      "tileScale": 3,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "concrete panel facade, retaining walls",
+      "maps": {
+        "albedo": "assets/textures/wall_concrete_albedo.png",
+        "normal": "assets/textures/wall_concrete_normal.png",
+        "arm": "assets/textures/wall_concrete_arm.png"
+      }
+    },
+    "wall_painted_concrete": {
+      "layer": 11,
+      "tileScale": 3,
+      "roughness": 0.9,
+      "metallic": 0,
+      "role": "painted render, coloured facade",
+      "maps": {
+        "albedo": "assets/textures/wall_painted_concrete_albedo.png",
+        "normal": "assets/textures/wall_painted_concrete_normal.png",
+        "arm": "assets/textures/wall_painted_concrete_arm.png"
+      }
+    },
+    "wall_stone": {
+      "layer": 12,
+      "tileScale": 2.4,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "stone cladding, institutional buildings",
+      "maps": {
+        "albedo": "assets/textures/wall_stone_albedo.png",
+        "normal": "assets/textures/wall_stone_normal.png",
+        "arm": "assets/textures/wall_stone_arm.png"
+      }
+    },
+    "wall_siding": {
+      "layer": 13,
+      "tileScale": 2,
+      "roughness": 0.95,
+      "metallic": 0,
+      "role": "weathered timber siding",
+      "maps": {
+        "albedo": "assets/textures/wall_siding_albedo.png",
+        "normal": "assets/textures/wall_siding_normal.png",
+        "arm": "assets/textures/wall_siding_arm.png"
+      }
+    },
+    "wall_metal_shutter": {
+      "layer": 14,
+      "tileScale": 2.4,
+      "roughness": 0.75,
+      "metallic": 0,
+      "role": "roller shutter, industrial cladding",
+      "maps": {
+        "albedo": "assets/textures/wall_metal_shutter_albedo.png",
+        "normal": "assets/textures/wall_metal_shutter_normal.png",
+        "arm": "assets/textures/wall_metal_shutter_arm.png"
+      }
+    },
+    "wall_corrugated": {
+      "layer": 15,
+      "tileScale": 2.4,
+      "roughness": 0.8,
+      "metallic": 0.2,
+      "role": "corrugated iron, warehouse, shed",
+      "maps": {
+        "albedo": "assets/textures/wall_corrugated_albedo.png",
+        "normal": "assets/textures/wall_corrugated_normal.png",
+        "arm": "assets/textures/wall_corrugated_arm.png"
+      }
+    },
+    "metal_rust": {
+      "layer": 16,
+      "tileScale": 1.4,
+      "roughness": 0.85,
+      "metallic": 0.25,
+      "role": "rusted steel, exposed structure",
+      "maps": {
+        "albedo": "assets/textures/metal_rust_albedo.png",
+        "normal": "assets/textures/metal_rust_normal.png",
+        "arm": "assets/textures/metal_rust_arm.png"
+      }
+    },
+    "metal_plate": {
+      "layer": 17,
+      "tileScale": 1.6,
+      "roughness": 0.6,
+      "metallic": -1,
+      "role": "steel plate, containers, machinery",
+      "maps": {
+        "albedo": "assets/textures/metal_plate_albedo.png",
+        "normal": "assets/textures/metal_plate_normal.png",
+        "arm": "assets/textures/metal_plate_arm.png"
+      }
+    },
+    "terrain_grass": {
+      "layer": 18,
+      "tileScale": 9,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "grass, parkland",
+      "maps": {
+        "albedo": "assets/textures/terrain_grass_albedo.png",
+        "normal": "assets/textures/terrain_grass_normal.png",
+        "arm": "assets/textures/terrain_grass_arm.png"
+      }
+    },
+    "terrain_dirt": {
+      "layer": 19,
+      "tileScale": 6,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "bare earth, worn ground, verges",
+      "maps": {
+        "albedo": "assets/textures/terrain_dirt_albedo.png",
+        "normal": "assets/textures/terrain_dirt_normal.png",
+        "arm": "assets/textures/terrain_dirt_arm.png"
+      }
+    },
+    "terrain_mud": {
+      "layer": 20,
+      "tileScale": 5,
+      "roughness": 0.75,
+      "metallic": 0,
+      "role": "mud, wet ground, construction ground",
+      "maps": {
+        "albedo": "assets/textures/terrain_mud_albedo.png",
+        "normal": "assets/textures/terrain_mud_normal.png",
+        "arm": "assets/textures/terrain_mud_arm.png"
+      }
+    },
+    "terrain_rock": {
+      "layer": 21,
+      "tileScale": 7,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "rocky ground, scree, cliff foot",
+      "maps": {
+        "albedo": "assets/textures/terrain_rock_albedo.png",
+        "normal": "assets/textures/terrain_rock_normal.png",
+        "arm": "assets/textures/terrain_rock_arm.png"
+      }
+    },
+    "terrain_sand": {
+      "layer": 22,
+      "tileScale": 6,
+      "roughness": 1,
+      "metallic": 0,
+      "role": "beach, dry verge, construction sand",
+      "maps": {
+        "albedo": "assets/textures/terrain_sand_albedo.png",
+        "normal": "assets/textures/terrain_sand_normal.png",
+        "arm": "assets/textures/terrain_sand_arm.png"
+      }
+    },
+    "floor_concrete": {
+      "layer": 23,
+      "tileScale": 2.4,
+      "roughness": 0.9,
+      "metallic": 0,
+      "role": "warehouse and shop floor",
+      "maps": {
+        "albedo": "assets/textures/floor_concrete_albedo.png",
+        "normal": "assets/textures/floor_concrete_normal.png",
+        "arm": "assets/textures/floor_concrete_arm.png"
+      }
+    },
+    "floor_wood": {
+      "layer": 24,
+      "tileScale": 1.6,
+      "roughness": 0.7,
+      "metallic": 0,
+      "role": "residential and cafe floor",
+      "maps": {
+        "albedo": "assets/textures/floor_wood_albedo.png",
+        "normal": "assets/textures/floor_wood_normal.png",
+        "arm": "assets/textures/floor_wood_arm.png"
+      }
+    },
+    "floor_tile": {
+      "layer": 25,
+      "tileScale": 1.2,
+      "roughness": 0.45,
+      "metallic": 0,
+      "role": "commercial floor, bathroom, kitchen",
+      "maps": {
+        "albedo": "assets/textures/floor_tile_albedo.png",
+        "normal": "assets/textures/floor_tile_normal.png",
+        "arm": "assets/textures/floor_tile_arm.png"
+      }
+    }
+  },
+  "licence": {
+    "id": "CC0",
+    "name": "CC0 1.0 Universal (Public Domain Dedication)",
+    "url": "https://polyhaven.com/license",
+    "redistributable": true,
+    "attribution_required": false
+  },
+  "provider": {
+    "id": "polyhaven",
+    "name": "Poly Haven",
+    "url": "https://polyhaven.com",
+    "api": "https://api.polyhaven.com",
+    "files": "https://dl.polyhaven.org/file/ph-assets"
+  },
+  "measured": {
+    "materialCount": 26,
+    "textureSize": 512,
+    "bytesOnDisk": 18272844,
+    "estimatedVramBytes": 109051904
+  }
+}
