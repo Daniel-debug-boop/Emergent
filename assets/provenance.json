@@ -1,0 +1,1034 @@
+{
+  "generated": "2026-09-27T03:25:26.277Z",
+  "provider": {
+    "id": "polyhaven",
+    "name": "Poly Haven",
+    "url": "https://polyhaven.com",
+    "api": "https://api.polyhaven.com",
+    "files": "https://dl.polyhaven.org/file/ph-assets"
+  },
+  "license": {
+    "id": "CC0",
+    "name": "CC0 1.0 Universal (Public Domain Dedication)",
+    "url": "https://polyhaven.com/license",
+    "redistributable": true,
+    "attribution_required": false
+  },
+  "count": 26,
+  "assets": [
+    {
+      "asset_id": "road_asphalt",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/asphalt_02",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/asphalt_02/asphalt_02_diff_2k.jpg",
+          "file": "assets/source/road_asphalt/road_asphalt_diff_2k.jpg",
+          "md5": "336af399fd98a39ab986d8b3bf73b4ff",
+          "resolution": "2k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/asphalt_02/asphalt_02_nor_gl_2k.jpg",
+          "file": "assets/source/road_asphalt/road_asphalt_normal_2k.jpg",
+          "md5": "77ebd1cc0b020ccaa1c6b58f103d1f75",
+          "resolution": "2k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/asphalt_02/asphalt_02_arm_2k.jpg",
+          "file": "assets/source/road_asphalt/road_asphalt_arm_2k.jpg",
+          "md5": "152c0fb79ad6f33040b79779fea98664",
+          "resolution": "2k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "road_asphalt_worn",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/worn_asphalt",
+      "creator": "Amal Kumar (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/worn_asphalt/worn_asphalt_diff_1k.jpg",
+          "file": "assets/source/road_asphalt_worn/road_asphalt_worn_diff_1k.jpg",
+          "md5": "8777234b139e454eaabcda0eb8115e45",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/worn_asphalt/worn_asphalt_nor_gl_1k.jpg",
+          "file": "assets/source/road_asphalt_worn/road_asphalt_worn_normal_1k.jpg",
+          "md5": "706a5c4e817c4d927029920578c01312",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/worn_asphalt/worn_asphalt_arm_1k.jpg",
+          "file": "assets/source/road_asphalt_worn/road_asphalt_worn_arm_1k.jpg",
+          "md5": "266dd8657cd7ead2f2fd16651e316bbf",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        16384,
+        16384
+      ]
+    },
+    {
+      "asset_id": "pavement_concrete",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/concrete_pavement_02",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement_02/concrete_pavement_02_diff_1k.jpg",
+          "file": "assets/source/pavement_concrete/pavement_concrete_diff_1k.jpg",
+          "md5": "bdee8d4deebb78609414453a5fb299e2",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement_02/concrete_pavement_02_nor_gl_1k.jpg",
+          "file": "assets/source/pavement_concrete/pavement_concrete_normal_1k.jpg",
+          "md5": "2c8ea332b4274e8728c5aa0ecf467d26",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement_02/concrete_pavement_02_arm_1k.jpg",
+          "file": "assets/source/pavement_concrete/pavement_concrete_arm_1k.jpg",
+          "md5": "0aa6febd7b811c980d13374142f0030c",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "pavement_pavers",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/concrete_pavers_02",
+      "creator": "Amal Kumar (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavers_02/concrete_pavers_02_diff_1k.jpg",
+          "file": "assets/source/pavement_pavers/pavement_pavers_diff_1k.jpg",
+          "md5": "a0669d6bb1ef8db865b7c05795761c5b",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavers_02/concrete_pavers_02_nor_gl_1k.jpg",
+          "file": "assets/source/pavement_pavers/pavement_pavers_normal_1k.jpg",
+          "md5": "4af20fb7e056987a7441d365d9d3fc80",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavers_02/concrete_pavers_02_arm_1k.jpg",
+          "file": "assets/source/pavement_pavers/pavement_pavers_arm_1k.jpg",
+          "md5": "f034ff649825d375788d11721138ec81",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        16384,
+        16384
+      ]
+    },
+    {
+      "asset_id": "street_cobble",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/cobblestone_03",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/cobblestone_03/cobblestone_03_diff_1k.jpg",
+          "file": "assets/source/street_cobble/street_cobble_diff_1k.jpg",
+          "md5": "b8628f730e819f80da9afdd88bebe2b8",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/cobblestone_03/cobblestone_03_nor_gl_1k.jpg",
+          "file": "assets/source/street_cobble/street_cobble_normal_1k.jpg",
+          "md5": "b09fc42f5079c45ceea94548e83985e2",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/cobblestone_03/cobblestone_03_arm_1k.jpg",
+          "file": "assets/source/street_cobble/street_cobble_arm_1k.jpg",
+          "md5": "ca7f1352c531d4cb0fbb7a4adad9b174",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "ground_gravel",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/bicolour_gravel",
+      "creator": "Dimitrios Savva (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/bicolour_gravel/bicolour_gravel_diff_1k.jpg",
+          "file": "assets/source/ground_gravel/ground_gravel_diff_1k.jpg",
+          "md5": "ffd4e43e15948f6577c92d415ccfdbdf",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/bicolour_gravel/bicolour_gravel_nor_gl_1k.jpg",
+          "file": "assets/source/ground_gravel/ground_gravel_normal_1k.jpg",
+          "md5": "f212970c0ce36f6b6c92cd9e1fe6ff0d",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/bicolour_gravel/bicolour_gravel_arm_1k.jpg",
+          "file": "assets/source/ground_gravel/ground_gravel_arm_1k.jpg",
+          "md5": "772c5fc648d4a7becea09890dc2d383c",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_brick",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/brick_wall_006",
+      "creator": "Jan Burghardt (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_006/brick_wall_006_diff_2k.jpg",
+          "file": "assets/source/wall_brick/wall_brick_diff_2k.jpg",
+          "md5": "ce58078bffb33ca142240f675060e972",
+          "resolution": "2k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_006/brick_wall_006_nor_gl_2k.jpg",
+          "file": "assets/source/wall_brick/wall_brick_normal_2k.jpg",
+          "md5": "4c9fe7bc3abfb9da9fb541e9b25c3995",
+          "resolution": "2k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_006/brick_wall_006_arm_2k.jpg",
+          "file": "assets/source/wall_brick/wall_brick_arm_2k.jpg",
+          "md5": "4ac18c9b094ded66e0638f6563599574",
+          "resolution": "2k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_brick_dark",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/brick_wall_10",
+      "creator": "Dimitrios Savva (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_10/brick_wall_10_diff_1k.jpg",
+          "file": "assets/source/wall_brick_dark/wall_brick_dark_diff_1k.jpg",
+          "md5": "31bed4677b97c5feb8773a9198e6aa25",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_10/brick_wall_10_nor_gl_1k.jpg",
+          "file": "assets/source/wall_brick_dark/wall_brick_dark_normal_1k.jpg",
+          "md5": "f7ebd2ad116d92426df06f069c19bfec",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_10/brick_wall_10_arm_1k.jpg",
+          "file": "assets/source/wall_brick_dark/wall_brick_dark_arm_1k.jpg",
+          "md5": "1938bdff14fe1b56cf53984d598158a2",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_plaster",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/white_plaster_02",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_diff_1k.jpg",
+          "file": "assets/source/wall_plaster/wall_plaster_diff_1k.jpg",
+          "md5": "7b10c2686bcfd76d1f309a20fd06b57e",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_nor_gl_1k.jpg",
+          "file": "assets/source/wall_plaster/wall_plaster_normal_1k.jpg",
+          "md5": "55fc03203ebf1dc703a380fde93ff502",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_arm_1k.jpg",
+          "file": "assets/source/wall_plaster/wall_plaster_arm_1k.jpg",
+          "md5": "4a5a080e2421fac4fa602680bef4c8b1",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_plaster_dirty",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/plastered_wall_03",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall_03/plastered_wall_03_diff_1k.jpg",
+          "file": "assets/source/wall_plaster_dirty/wall_plaster_dirty_diff_1k.jpg",
+          "md5": "0113b3562589857b4eb11400b228b8d5",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall_03/plastered_wall_03_nor_gl_1k.jpg",
+          "file": "assets/source/wall_plaster_dirty/wall_plaster_dirty_normal_1k.jpg",
+          "md5": "741679fed0b19fc4ae3d76eeb14ebde2",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall_03/plastered_wall_03_arm_1k.jpg",
+          "file": "assets/source/wall_plaster_dirty/wall_plaster_dirty_arm_1k.jpg",
+          "md5": "95f034e87b500b4531838633eb504966",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_concrete",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/concrete_wall_005",
+      "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_005/concrete_wall_005_diff_1k.jpg",
+          "file": "assets/source/wall_concrete/wall_concrete_diff_1k.jpg",
+          "md5": "67c38b069f2d69d0affe75cdce587dc1",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_005/concrete_wall_005_nor_gl_1k.jpg",
+          "file": "assets/source/wall_concrete/wall_concrete_normal_1k.jpg",
+          "md5": "40b05a1b9c041c9254e02ce4394a16be",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_005/concrete_wall_005_arm_1k.jpg",
+          "file": "assets/source/wall_concrete/wall_concrete_arm_1k.jpg",
+          "md5": "9f7bbe949038ce0c77d8dccb51f2fd99",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_painted_concrete",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/painted_concrete",
+      "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_concrete/painted_concrete_diff_1k.jpg",
+          "file": "assets/source/wall_painted_concrete/wall_painted_concrete_diff_1k.jpg",
+          "md5": "57cc093c9a4226186da0149c2d759055",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_concrete/painted_concrete_nor_gl_1k.jpg",
+          "file": "assets/source/wall_painted_concrete/wall_painted_concrete_normal_1k.jpg",
+          "md5": "a77bcb5b3b8bbfca4da665361a5dd97f",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_concrete/painted_concrete_arm_1k.jpg",
+          "file": "assets/source/wall_painted_concrete/wall_painted_concrete_arm_1k.jpg",
+          "md5": "adf948e0d77440ead924b57fd59b312d",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_stone",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/sandstone_blocks_05",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_diff_1k.jpg",
+          "file": "assets/source/wall_stone/wall_stone_diff_1k.jpg",
+          "md5": "2c3651fdf1071d7b60d82f0e86953968",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_nor_gl_1k.jpg",
+          "file": "assets/source/wall_stone/wall_stone_normal_1k.jpg",
+          "md5": "cb9d5f4e66155a34236d6e2420ce276b",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_arm_1k.jpg",
+          "file": "assets/source/wall_stone/wall_stone_arm_1k.jpg",
+          "md5": "d6eff1ed1206fac358da4a4d2a5e407d",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_siding",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/wood_planks_grey",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_planks_grey/wood_planks_grey_diff_1k.jpg",
+          "file": "assets/source/wall_siding/wall_siding_diff_1k.jpg",
+          "md5": "f2b4a70fed329c13850917c5f2d1498c",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_planks_grey/wood_planks_grey_nor_gl_1k.jpg",
+          "file": "assets/source/wall_siding/wall_siding_normal_1k.jpg",
+          "md5": "fe633ea606ac22b732d4204a7fa52b03",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_planks_grey/wood_planks_grey_arm_1k.jpg",
+          "file": "assets/source/wall_siding/wall_siding_arm_1k.jpg",
+          "md5": "2da2c5b43105bd0b1bcc8712e8164406",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_metal_shutter",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/painted_metal_shutter",
+      "creator": "Dario Barresi (Baking), Rico Cilliers (Processing ), Charlotte Baglioni (Photography)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_diff_1k.jpg",
+          "file": "assets/source/wall_metal_shutter/wall_metal_shutter_diff_1k.jpg",
+          "md5": "b2b648a56ca737d51999525e857f499a",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_nor_gl_1k.jpg",
+          "file": "assets/source/wall_metal_shutter/wall_metal_shutter_normal_1k.jpg",
+          "md5": "a18c51114f00627f9e48254e870ceb91",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_metal_shutter/painted_metal_shutter_arm_1k.jpg",
+          "file": "assets/source/wall_metal_shutter/wall_metal_shutter_arm_1k.jpg",
+          "md5": "be0154e168d571f601cff127181d5ca0",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "wall_corrugated",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/rusty_corrugated_iron",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_corrugated_iron/rusty_corrugated_iron_diff_1k.jpg",
+          "file": "assets/source/wall_corrugated/wall_corrugated_diff_1k.jpg",
+          "md5": "6e30158f4ff9f8492cfc800803b484dd",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_corrugated_iron/rusty_corrugated_iron_nor_gl_1k.jpg",
+          "file": "assets/source/wall_corrugated/wall_corrugated_normal_1k.jpg",
+          "md5": "b4effdfcd2ec71faa91bb6c92f531f48",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_corrugated_iron/rusty_corrugated_iron_arm_1k.jpg",
+          "file": "assets/source/wall_corrugated/wall_corrugated_arm_1k.jpg",
+          "md5": "9d24b3fa4c2abf82d262f18ee58e57e1",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        16384,
+        16384
+      ]
+    },
+    {
+      "asset_id": "metal_rust",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/rusty_metal_02",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_metal_02/rusty_metal_02_diff_1k.jpg",
+          "file": "assets/source/metal_rust/metal_rust_diff_1k.jpg",
+          "md5": "476bff9959bc727bd4b83c0a9ac4aeaa",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_metal_02/rusty_metal_02_nor_gl_1k.jpg",
+          "file": "assets/source/metal_rust/metal_rust_normal_1k.jpg",
+          "md5": "8d6dc7e26f2708ec59e2a739711c612b",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rusty_metal_02/rusty_metal_02_arm_1k.jpg",
+          "file": "assets/source/metal_rust/metal_rust_arm_1k.jpg",
+          "md5": "888da78afd9bfc9fd3dafbbf2a5b8134",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "metal_plate",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/metal_plate_02",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_diff_1k.jpg",
+          "file": "assets/source/metal_plate/metal_plate_diff_1k.jpg",
+          "md5": "531b7e067dc537e0b3c7962175e04ffd",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_nor_gl_1k.jpg",
+          "file": "assets/source/metal_plate/metal_plate_normal_1k.jpg",
+          "md5": "ce8198004fd9409f592a7f024be0c01e",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_arm_1k.jpg",
+          "file": "assets/source/metal_plate/metal_plate_arm_1k.jpg",
+          "md5": "ff6e0499763d76c76b1568b16f5f93f6",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "terrain_grass",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/grass_ground",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_diff_2k.jpg",
+          "file": "assets/source/terrain_grass/terrain_grass_diff_2k.jpg",
+          "md5": "fd97f2402677e6686b2d9159fc3a4256",
+          "resolution": "2k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_nor_gl_2k.jpg",
+          "file": "assets/source/terrain_grass/terrain_grass_normal_2k.jpg",
+          "md5": "c8b2dd95f09868c4aacb91f62c673344",
+          "resolution": "2k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_arm_2k.jpg",
+          "file": "assets/source/terrain_grass/terrain_grass_arm_2k.jpg",
+          "md5": "75b34cc0f86f6b7ccd7f41898963ad15",
+          "resolution": "2k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        16384,
+        16384
+      ]
+    },
+    {
+      "asset_id": "terrain_dirt",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/dirt",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_diff_1k.jpg",
+          "file": "assets/source/terrain_dirt/terrain_dirt_diff_1k.jpg",
+          "md5": "cb37e24797597b1dd1ae3819fa80f076",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_nor_gl_1k.jpg",
+          "file": "assets/source/terrain_dirt/terrain_dirt_normal_1k.jpg",
+          "md5": "362610edf09fd31735958eecec823a84",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_arm_1k.jpg",
+          "file": "assets/source/terrain_dirt/terrain_dirt_arm_1k.jpg",
+          "md5": "b734c3c74da00491da65aff33cd06d2e",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "terrain_mud",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/mud_forest",
+      "creator": "eye-candy.xyz (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/mud_forest/mud_forest_diff_1k.jpg",
+          "file": "assets/source/terrain_mud/terrain_mud_diff_1k.jpg",
+          "md5": "d3ea8fc962bbf54d66fc5723cd0096c1",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/mud_forest/mud_forest_nor_gl_1k.jpg",
+          "file": "assets/source/terrain_mud/terrain_mud_normal_1k.jpg",
+          "md5": "6e2f0d15fdf402ca5221f63d0bfbeb60",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/mud_forest/mud_forest_arm_1k.jpg",
+          "file": "assets/source/terrain_mud/terrain_mud_arm_1k.jpg",
+          "md5": "344cbb172e258e528586ff959e84d825",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "terrain_rock",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/rock_ground_02",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_ground_02/rock_ground_02_diff_1k.jpg",
+          "file": "assets/source/terrain_rock/terrain_rock_diff_1k.jpg",
+          "md5": "3820a229d3cb7a625f8e31a5b41c26df",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_ground_02/rock_ground_02_nor_gl_1k.jpg",
+          "file": "assets/source/terrain_rock/terrain_rock_normal_1k.jpg",
+          "md5": "11c91ded28ff24b887602a87c825dc14",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_ground_02/rock_ground_02_arm_1k.jpg",
+          "file": "assets/source/terrain_rock/terrain_rock_arm_1k.jpg",
+          "md5": "f00a928ac93cda266bac8596795b523b",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "terrain_sand",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/sand_02",
+      "creator": "Charlotte Baglioni (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_02/sand_02_diff_1k.jpg",
+          "file": "assets/source/terrain_sand/terrain_sand_diff_1k.jpg",
+          "md5": "e14de87d9427a79a5e8e6341c39d1da8",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_02/sand_02_nor_gl_1k.jpg",
+          "file": "assets/source/terrain_sand/terrain_sand_normal_1k.jpg",
+          "md5": "fca8d75a7fba03a673dbba8ada9f53d7",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_02/sand_02_arm_1k.jpg",
+          "file": "assets/source/terrain_sand/terrain_sand_arm_1k.jpg",
+          "md5": "6bee467d59eca22a9940e40fa351f87b",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "floor_concrete",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/concrete_floor_01",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_floor_01/concrete_floor_01_diff_1k.jpg",
+          "file": "assets/source/floor_concrete/floor_concrete_diff_1k.jpg",
+          "md5": "187065cfc20a35eb421eac6d4f38c58f",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_floor_01/concrete_floor_01_nor_gl_1k.jpg",
+          "file": "assets/source/floor_concrete/floor_concrete_normal_1k.jpg",
+          "md5": "3862d48eb9495b302652cac825738876",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_floor_01/concrete_floor_01_arm_1k.jpg",
+          "file": "assets/source/floor_concrete/floor_concrete_arm_1k.jpg",
+          "md5": "146fe392b094a93768ba67216ea025d1",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "floor_wood",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/plank_flooring",
+      "creator": "Dario Barresi (Processing), Dimitrios Savva (Photography), Rico Cilliers (Tiling)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plank_flooring/plank_flooring_diff_1k.jpg",
+          "file": "assets/source/floor_wood/floor_wood_diff_1k.jpg",
+          "md5": "cf793f9667740c58d9b882305ea8a9f8",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plank_flooring/plank_flooring_nor_gl_1k.jpg",
+          "file": "assets/source/floor_wood/floor_wood_normal_1k.jpg",
+          "md5": "4854b68e0de468b492b7f7cc018ce7a1",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plank_flooring/plank_flooring_arm_1k.jpg",
+          "file": "assets/source/floor_wood/floor_wood_arm_1k.jpg",
+          "md5": "956b9f26d06e5d48243dc2bf12126970",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    },
+    {
+      "asset_id": "floor_tile",
+      "source": "Poly Haven",
+      "source_provider_id": "polyhaven",
+      "source_url": "https://polyhaven.com/a/large_grey_tiles",
+      "creator": "Rob Tuytel (All)",
+      "license": "CC0",
+      "license_name": "CC0 1.0 Universal (Public Domain Dedication)",
+      "license_url": "https://polyhaven.com/license",
+      "original_format": "jpeg",
+      "maps": {
+        "diff": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_grey_tiles/large_grey_tiles_diff_1k.jpg",
+          "file": "assets/source/floor_tile/floor_tile_diff_1k.jpg",
+          "md5": "33a074b6f6d9b306eabd905fcf111fc6",
+          "resolution": "1k",
+          "srgb": true
+        },
+        "normal": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_grey_tiles/large_grey_tiles_nor_gl_1k.jpg",
+          "file": "assets/source/floor_tile/floor_tile_normal_1k.jpg",
+          "md5": "9a555ee74c329977bb0da56e6b02c5d6",
+          "resolution": "1k",
+          "srgb": false
+        },
+        "arm": {
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/large_grey_tiles/large_grey_tiles_arm_1k.jpg",
+          "file": "assets/source/floor_tile/floor_tile_arm_1k.jpg",
+          "md5": "0b055808ba51e852232b72028cf71160",
+          "resolution": "1k",
+          "srgb": false
+        }
+      },
+      "fetched": "2026-09-27",
+      "source_max_resolution": [
+        8192,
+        8192
+      ]
+    }
+  ]
+}

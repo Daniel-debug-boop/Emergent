@@ -26,12 +26,32 @@ jobs:
       - name: Syntax check
         run: npm run check
 
-      # Runs the world, math, culling, missions, physics, input, project,
-      # tooling and runtime suites. The physics suite executes the real Rapier
-      # engine and the runtime suite executes the real game frame loop against
-      # a validating WebGL2 surface, so no GPU or browser is required in CI.
+      # Runs the world, math, culling, missions, geometry, shader, shading,
+      # physics, input, project, tooling and runtime suites.
+      #
+      # The shader suites are the ones that matter most here and exist because
+      # the harness cannot compile GLSL or rasterize: `test_shaders.mjs` parses
+      # every shader with a real parser and asserts that each uniform the
+      # renderer sets is declared, each declared uniform is set, and the vertex
+      # shader reads all four attributes the buffers upload; `test_shading.mjs`
+      # transliterates the BRDF into JS and asserts its physical behaviour. The
+      # entire material system once ran green against a fragment shader that
+      # read only three of the four attributes, so both directions are checked.
+      #
+      # The physics suite executes the real Rapier engine, the geometry suite
+      # executes the real material table and detail kit, and the runtime suite
+      # executes the real game frame loop against a validating WebGL2 surface,
+      # so no GPU or browser is required in CI.
       - name: Test
         run: npm test
+
+      # Every third-party asset in the game is named in a manifest with its
+      # licence, its source URL and its author. This fails the build if any of
+      # them stops being CC0, loses its provenance, or stops matching what
+      # actually ships — which is the only way "these assets can legally ship"
+      # stays true rather than being a claim in a README.
+      - name: Audit assets
+        run: npm run assets:audit
 
       - name: Build
         run: npm run build
@@ -45,3 +65,16 @@ jobs:
           test -s dist/vendor/rapier.mjs
           cmp dist/vendor/rapier.mjs node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs
           echo "vendored rapier is byte-identical to the tested dependency"
+
+      # A build that shipped the code but not the material set would pass every
+      # check above and 404 on the player's first frame. The count comes from
+      # the descriptor, so adding a material cannot quietly break this.
+      - name: Verify the material set shipped
+        run: |
+          test -s dist/assets/textures/materials.mjs
+          for m in albedo normal arm; do
+            n=$(ls dist/assets/textures/*_$m.png | wc -l)
+            echo "  $m: $n tiles"
+            test "$n" -ge 26
+          done
+          du -sh dist/assets/textures

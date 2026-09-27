@@ -32,8 +32,54 @@ const GL_ENUMS = {
   FLOAT: 0x1406, TRIANGLES: 0x0004, TRIANGLE_STRIP: 0x0005, POINTS: 0x0000,
   DEPTH_TEST: 0x0b71, LEQUAL: 0x0203, CULL_FACE: 0x0b44, BACK: 0x0405,
   COLOR_BUFFER_BIT: 0x4000, DEPTH_BUFFER_BIT: 0x0100, BLEND: 0x0be2,
-  SRC_ALPHA: 0x0302, ONE_MINUS_SRC_ALPHA: 0x0303
+  SRC_ALPHA: 0x0302, ONE_MINUS_SRC_ALPHA: 0x0303,
+
+  // -- textures ------------------------------------------------------------
+  // Added with the material pipeline. Texture support is not a convenience
+  // here: without it the harness could not tell the difference between a
+  // renderer that uploads a 26-layer, mipmapped, sRGB-correct texture array and
+  // one that binds a 1x1 placeholder and ships.
+  TEXTURE_2D: 0x0de1, TEXTURE_2D_ARRAY: 0x8c1a, TEXTURE_3D: 0x806f,
+  TEXTURE0: 0x84c0, TEXTURE1: 0x84c1, TEXTURE2: 0x84c2, TEXTURE3: 0x84c3,
+  TEXTURE4: 0x84c4, TEXTURE5: 0x84c5, TEXTURE6: 0x84c6, TEXTURE7: 0x84c7,
+  TEXTURE_MAG_FILTER: 0x2800, TEXTURE_MIN_FILTER: 0x2801,
+  TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803, TEXTURE_WRAP_R: 0x8072,
+  TEXTURE_BASE_LEVEL: 0x813c, TEXTURE_MAX_LEVEL: 0x813d,
+  NEAREST: 0x2600, LINEAR: 0x2601,
+  NEAREST_MIPMAP_NEAREST: 0x2700, LINEAR_MIPMAP_NEAREST: 0x2701,
+  NEAREST_MIPMAP_LINEAR: 0x2702, LINEAR_MIPMAP_LINEAR: 0x2703,
+  REPEAT: 0x2901, CLAMP_TO_EDGE: 0x812f, MIRRORED_REPEAT: 0x8370,
+  RGBA: 0x1908, RGB: 0x1907, RED: 0x1903, RGBA8: 0x8058, RGB8: 0x8051,
+  SRGB8_ALPHA8: 0x8c43, R8: 0x8229,
+  UNSIGNED_BYTE: 0x1401, UNSIGNED_SHORT: 0x1403, FLOAT: 0x1406,
+  UNPACK_FLIP_Y_WEBGL: 0x9240, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241,
+  UNPACK_ALIGNMENT: 0x0cf5, UNPACK_COLORSPACE_CONVERSION_WEBGL: 0x9243,
+  NONE: 0, BROWSER_DEFAULT_WEBGL: 0x9244
 };
+
+/**
+ * Internal format to the (format, type) pair that is legal with it.
+ *
+ * This is the table that catches the mistake people actually make: declaring
+ * an sRGB array and then uploading it as UNSIGNED_SHORT, or handing a
+ * float array to texImage2D with UNSIGNED_BYTE. A real driver reports that as
+ * INVALID_OPERATION, and so does this.
+ */
+const INTERNAL_FORMAT_RULES = {
+  [GL_ENUMS.RGBA8]: { formats: [GL_ENUMS.RGBA, GL_ENUMS.RGB], types: [GL_ENUMS.UNSIGNED_BYTE] },
+  [GL_ENUMS.SRGB8_ALPHA8]: { formats: [GL_ENUMS.RGBA], types: [GL_ENUMS.UNSIGNED_BYTE] },
+  [GL_ENUMS.R8]: { formats: [GL_ENUMS.RED], types: [GL_ENUMS.UNSIGNED_BYTE] }
+};
+
+/** Sampler states that require a mip chain to be complete. */
+const MIPMAP_FILTERS = new Set([
+  GL_ENUMS.NEAREST_MIPMAP_NEAREST, GL_ENUMS.LINEAR_MIPMAP_NEAREST,
+  GL_ENUMS.NEAREST_MIPMAP_LINEAR, GL_ENUMS.LINEAR_MIPMAP_LINEAR
+]);
+
+const MIP_FILTER_NAMES = Object.fromEntries(
+  [...MIPMAP_FILTERS].map(v => [v, Object.keys(GL_ENUMS).find(k => GL_ENUMS[k] === v)])
+);
 
 class HeadlessGL {
   constructor(canvas) {
@@ -49,6 +95,11 @@ class HeadlessGL {
     this.boundBuffer = null;
     this.currentProgram = null;
     this._programs = new Set();
+    // Kept so a test can inspect every VAO's attribute state, not just the
+    // currently bound one. The renderer rebinds constantly, so "whatever is
+    // bound right now" is not enough to diagnose a draw.
+    this._vaos = [];
+    this._buffers = [];
     // Named `viewportState`, not `viewport`: an own field would shadow the
     // WebGL viewport() method on the prototype and the renderer would break.
     this.viewportState = { x: 0, y: 0, width: 0, height: 0 };
@@ -56,6 +107,207 @@ class HeadlessGL {
     this._enabled = new Set();
     this.unmodelled = new Set();
     this.unmodelledArgs = new Map();
+
+    // -- texture state -----------------------------------------------------
+    this._textures = [];
+    this._textureByUnit = new Map();     // unit -> texture currently bound
+    this._textureTargetByUnit = new Map();
+    this.activeTextureUnit = 0;
+    this.pixelStore = new Map();
+    this.stats.texturesCreated = 0;
+    this.stats.textureUploads = 0;
+    this.stats.mipmapsGenerated = 0;
+    this.stats.textureBytes = 0;
+    this.stats.imageDecodes = 0;
+  }
+
+  // -- textures ------------------------------------------------------------
+
+  _newTexture(target) {
+    const tex = {
+      id: this._nextHandle++,
+      target,
+      width: 0, height: 0, depth: 0,
+      internalFormat: null,
+      levels: 0,
+      mipsGenerated: false,
+      // Per-level upload record: which mip levels actually received pixels.
+      uploaded: new Set(),
+      params: { [GL_ENUMS.TEXTURE_MIN_FILTER]: GL_ENUMS.NEAREST, [GL_ENUMS.TEXTURE_MAG_FILTER]: GL_ENUMS.LINEAR },
+      deleted: false
+    };
+    this._textures.push(tex);
+    this.stats.texturesCreated++;
+    return tex;
+  }
+
+  createTexture() { return this._newTexture('empty'); }
+
+  activeTexture(unit) {
+    if (unit < GL_ENUMS.TEXTURE0 || unit > GL_ENUMS.TEXTURE0 + 31) {
+      this._error(`activeTexture: unit ${unit} is out of range`);
+    }
+    this.activeTextureUnit = unit - GL_ENUMS.TEXTURE0;
+  }
+
+  bindTexture(target, texture) {
+    if (texture && texture.deleted) { this._error('bindTexture on a deleted texture'); return; }
+    if (texture) {
+      // A texture object is bound to exactly one target for its lifetime.
+      // Silently re-binding it to another target is a real driver error and is
+      // the usual reason a sampler "works" on one pass and not the next.
+      if (texture.target === 'empty') texture.target = target;
+      else if (texture.target !== target) {
+        this._error(`texture ${texture.id} is bound to ${target} but was created for ${texture.target}`);
+      }
+    }
+    this._textureByUnit.set(this.activeTextureUnit, texture || null);
+    this._textureTargetByUnit.set(this.activeTextureUnit, target);
+  }
+
+  _unitTexture(unit) { return this._textureByUnit.get(unit) || null; }
+
+  texParameteri(target, pname, param) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    if (!tex) { this._error(`texParameteri(${pname}) with no texture bound to unit ${this.activeTextureUnit}`); return; }
+    tex.params[pname] = param;
+  }
+
+  pixelStorei(pname, param) { this.pixelStore.set(pname, param); }
+
+  /**
+   * Immutable storage for a 2D array: the WebGL2 path for a texture array.
+   *
+   * Levels are allocated here and must be filled, because a texture whose level
+   * 0 has no data is an incomplete texture and every draw that samples it
+   * returns black on a real driver.
+   */
+  texStorage3D(target, levels, internalFormat, width, height, depth) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    if (!tex) { this._error('texStorage3D with no texture bound'); return; }
+    if (target !== GL_ENUMS.TEXTURE_2D_ARRAY) {
+      this._error(`texStorage3D called with target ${target}, expected TEXTURE_2D_ARRAY`);
+    }
+    if (tex.width || tex.levels) { this._error('texStorage3D on a texture that already has storage'); return; }
+    const rule = INTERNAL_FORMAT_RULES[internalFormat];
+    if (!rule) this._error(`texStorage3D: internal format ${internalFormat} is not modelled`);
+    tex.width = width; tex.height = height; tex.depth = depth;
+    tex.internalFormat = internalFormat;
+    tex.levels = levels;
+    tex.mipsGenerated = false;
+  }
+
+  texStorage2D(target, levels, internalFormat, width, height) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    if (!tex) { this._error('texStorage2D with no texture bound'); return; }
+    tex.width = width; tex.height = height; tex.depth = 1;
+    tex.internalFormat = internalFormat;
+    tex.levels = levels;
+    tex.mipsGenerated = false;
+  }
+
+  /**
+   * Upload one layer of an array texture, at one mip level.
+   *
+   * The layer index and the level are both checked against the allocated
+   * storage, which is what catches an off-by-one in a loop that fills a
+   * material array — the failure that otherwise shows up as one missing
+   * material in a world full of correctly textured ones.
+   */
+  texSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type, pixels) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    this.stats.textureUploads++;
+    if (!tex) { this._error('texSubImage3D with no texture bound'); return; }
+    if (!tex.levels) { this._error('texSubImage3D before texStorage3D'); return; }
+    if (level < 0 || level >= tex.levels) {
+      this._error(`texSubImage3D level ${level} outside the ${tex.levels} allocated`);
+    }
+    if (zoffset < 0 || zoffset + depth > tex.depth) {
+      this._error(`texSubImage3D layer ${zoffset}..${zoffset + depth} outside the ${tex.depth} allocated`);
+    }
+    if (xoffset < 0 || yoffset < 0 || xoffset + width > tex.width || yoffset + height > tex.height) {
+      this._error(`texSubImage3D region ${width}x${height}+${xoffset},${yoffset} outside ${tex.width}x${tex.height}`);
+    }
+    const rule = INTERNAL_FORMAT_RULES[tex.internalFormat];
+    if (rule && !rule.formats.includes(format)) {
+      this._error(`texSubImage3D format ${format} is not valid for internal format ${tex.internalFormat}`);
+    }
+    if (rule && !rule.types.includes(type)) {
+      this._error(`texSubImage3D type ${type} is not valid for internal format ${tex.internalFormat}`);
+    }
+    if (pixels && pixels.length !== width * height * depth * 4) {
+      this._error(`texSubImage3D supplied ${pixels.length} bytes, expected ${width * height * depth * 4}`);
+    }
+    if (level === 0) tex.uploaded.add(zoffset);
+    this.stats.textureBytes += width * height * depth * 4;
+  }
+
+  /** The 2D path, used for anything that is not a material array. */
+  texImage2D(target, level, internalFormat, width, height, border, format, type, pixels) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    this.stats.textureUploads++;
+    if (!tex) { this._error('texImage2D with no texture bound'); return; }
+    if (target === GL_ENUMS.TEXTURE_2D_ARRAY) {
+      this._error('texImage2D used to fill a TEXTURE_2D_ARRAY; texSubImage3D is the array path');
+      return;
+    }
+    if (pixels && pixels.length !== width * height * 4) {
+      this._error(`texImage2D supplied ${pixels.length} bytes, expected ${width * height * 4}`);
+    }
+    tex.width = width; tex.height = height; tex.depth = 1;
+    tex.internalFormat = internalFormat;
+    tex.levels = Math.max(tex.levels, level + 1);
+    tex.uploaded.add(0);
+    tex.mipsGenerated = false;
+    this.stats.textureBytes += width * height * 4;
+  }
+
+  generateMipmap(target) {
+    const tex = this._unitTexture(this.activeTextureUnit);
+    if (!tex) { this._error('generateMipmap with no texture bound'); return; }
+    if (!tex.width) { this._error('generateMipmap on a texture with no data'); return; }
+    tex.mipsGenerated = true;
+    this.stats.mipmapsGenerated++;
+  }
+
+  deleteTexture(texture) { if (texture) texture.deleted = true; }
+
+  /**
+   * Verify every texture is samplable, the way a driver would at draw time.
+   *
+   * A texture with a mipmap minification filter and no mip chain is
+   * incomplete: it samples as solid black. That is invisible in a screenshot
+   * taken at one distance and is the reason a scene can look fine up close and
+   * disappear at range, so it is checked explicitly.
+   */
+  auditTextures() {
+    const problems = [];
+    for (const tex of this._textures) {
+      if (tex.deleted || !tex.levels) continue;
+      const min = tex.params[GL_ENUMS.TEXTURE_MIN_FILTER];
+      const needsMips = MIPMAP_FILTERS.has(min);
+      const hasMips = tex.mipsGenerated || tex.levels > 1;
+      if (needsMips && !hasMips) {
+        problems.push(`texture ${tex.id} uses ${MIP_FILTER_NAMES[min]} but has no mip chain, so it samples as black`);
+      }
+      if (tex.depth > 1) {
+        const missing = [];
+        for (let l = 0; l < tex.depth; l++) if (!tex.uploaded.has(l)) missing.push(l);
+        if (missing.length) {
+          problems.push(`texture ${tex.id} is a ${tex.depth}-layer array with ${missing.length} empty layer(s): ${missing.slice(0, 6).join(',')}`);
+        }
+      }
+    }
+    return problems;
+  }
+
+  /** A summary the test suite can assert on without reaching into internals. */
+  textureReport() {
+    return this._textures.filter(t => !t.deleted).map(t => ({
+      id: t.id, target: t.target, width: t.width, height: t.height, layers: t.depth,
+      internalFormat: t.internalFormat, levels: t.levels, mips: t.mipsGenerated,
+      minFilter: t.params[GL_ENUMS.TEXTURE_MIN_FILTER]
+    }));
   }
 
   _makeVao() {
@@ -89,8 +341,8 @@ class HeadlessGL {
   }
 
   // -- object creation ----------------------------------------------------
-  createBuffer() { return { id: this._nextHandle++, data: null, byteLength: 0, hasNaN: false, usage: 0 }; }
-  createVertexArray() { return this._makeVao(); }
+  createBuffer() { const b = { id: this._nextHandle++, data: null, byteLength: 0, hasNaN: false, usage: 0 }; this._buffers.push(b); return b; }
+  createVertexArray() { const v = this._makeVao(); this._vaos.push(v); return v; }
   createShader(type) { return { id: this._nextHandle++, type, source: '', compileOk: true, problems: [] }; }
   createProgram() {
     const program = { id: this._nextHandle++, shaders: [], uniforms: new Map(), linked: false };
@@ -220,6 +472,23 @@ class HeadlessGL {
     }
     return true;
   }
+  /**
+   * A vec4 array uniform. Validated like every other uniform, because the
+   * material table is uploaded through this and a bad entry index there is a
+   * silently black surface rather than an error.
+   */
+  uniform4fv(loc, value) {
+    if (!loc) return;
+    if (!value) { this._error(`uniform4fv(${loc.name}) called with no data`); return; }
+    for (let i = 0; i < value.length; i++) {
+      if (!Number.isFinite(value[i])) {
+        this._error(`uniform4fv(${loc.name}) contains non-finite values at index ${i}`);
+        return;
+      }
+    }
+    loc.value = value;
+  }
+
   uniformMatrix4fv(loc, transpose, value) {
     if (!this._checkUniform(loc, 'Matrix4fv')) return;
     const v = Float32Array.from(value);
@@ -300,7 +569,45 @@ function make2DContext() {
     arc: record('arc'), fill: record('fill'), stroke: record('stroke'),
     fillText: record('fillText'), strokeText: record('strokeText'),
     save: record('save'), restore: record('restore'),
-    translate: record('translate'), rotate: record('rotate'), scale: record('scale')
+    translate: record('translate'), rotate: record('rotate'), scale: record('scale'),
+    // Image decoding. `drawImage` records the call and `getImageData` returns a
+    // deterministic buffer of exactly the right size, so the renderer's whole
+    // upload path — canvas sizing, ImageData, texSubImage3D — runs for real
+    // while the harness stays free of a PNG decoder. What the pixels *are* is
+    // not the harness's business; that they are the right number of them, and
+    // that they reached the right texture layer, is.
+    drawImage: record('drawImage'),
+    getImageData(x, y, w, h) {
+      ops.count++;
+      return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4).fill(128) };
+    },
+    putImageData: record('putImageData'),
+    createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+    measureText(t) { return { width: String(t).length * 6 }; },
+    setTransform: record('setTransform'), transform: record('transform')
+  };
+}
+
+/**
+ * A stand-in for `HTMLImageElement`.
+ *
+ * Reports the size the renderer's material descriptor declares, which is the
+ * number the renderer is about to assert against. If a baked tile is ever the
+ * wrong size, the descriptor is what the game reads and the game is what fails,
+ * so the harness only has to answer the question that is actually being asked.
+ */
+function makeImage(width = 512, height = 512) {
+  return {
+    naturalWidth: width,
+    naturalHeight: height,
+    width, height,
+    complete: true,
+    _src: '',
+    get src() { return this._src; },
+    set src(v) { this._src = String(v); },
+    decode() { return Promise.resolve(this); },
+    addEventListener() {},
+    removeEventListener() {}
   };
 }
 
@@ -408,6 +715,14 @@ class FakeAudioContext {
 
 const rafQueue = [];
 const globalListeners = {};
+
+/** The size a decoded image reports. Defaults to the baked texture size. */
+let imageSize = { width: 512, height: 512 };
+
+/** Make `new Image()` report a different decoded size, to test a mismatch. */
+export function setImageSize(width, height = width) {
+  imageSize = { width, height };
+}
 let virtualNow = performance.now();
 
 /**
@@ -483,6 +798,10 @@ export function setupHeadless(options = {}) {
   globalThis.cancelAnimationFrame = () => {};
   globalThis.localStorage = makeLocalStorage();
   globalThis.AudioContext = FakeAudioContext;
+  // Images report the size the material descriptor declares, so the renderer's
+  // upload path runs for real. `setImageSize` lets a test make the decoded size
+  // disagree with the descriptor and assert that the renderer notices.
+  globalThis.Image = class { constructor() { return makeImage(imageSize.width, imageSize.height); } };
   return { document, location };
 }
 
@@ -525,6 +844,7 @@ export function resetHarness() {
   rafQueue.length = 0;
   for (const key of Object.keys(globalListeners)) delete globalListeners[key];
   virtualNow = performance.now();
+  imageSize = { width: 512, height: 512 };
 }
 
 /**
