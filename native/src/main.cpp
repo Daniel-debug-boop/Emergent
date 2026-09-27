@@ -38,7 +38,11 @@ void printUsage(const char *argv0) {
         "  --render WxH   attach the Vulkan renderer and open a WxH target\n"
         "  --width W      framebuffer width (default 1280)\n"
         "  --height H     framebuffer height (default 720)\n"
-        "  --walk         hold the forward axis for the duration\n",
+        "  --walk         hold the forward axis for the duration\n"
+        "  --assets DIR   where the packed KTX2 material maps are\n"
+        "                 (default build/native-assets, relative to the cwd)\n"
+        "  --scene [N]    generate a world for seed N and stream a slice of it to the\n"
+        "                  renderer, then report what was built\n",
         argv0);
 }
 
@@ -66,8 +70,11 @@ int main(int argc, char **argv) {
     double realtime = 0.0;
     bool wantRender = false;
     bool walk = false;
+    bool scene = false;
+    int32_t seed = 7;
     uint32_t width = 1280;
     uint32_t height = 720;
+    std::string assetDir;
 
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -117,6 +124,26 @@ int main(int argc, char **argv) {
             }
         } else if (std::strcmp(arg, "--walk") == 0) {
             walk = true;
+        } else if (std::strcmp(arg, "--scene") == 0) {
+            scene = true;
+            if (hasValue) {
+                char *end = nullptr;
+                const long v = std::strtol(argv[i + 1], &end, 10);
+                if (end != argv[i + 1] && *end == '\0') {
+                    seed = static_cast<int32_t>(v);
+                    ++i;  // consumed, so it is not re-parsed as an argument
+                }
+            }
+        } else if (std::strcmp(arg, "--assets") == 0) {
+            // Where the packed KTX2 material maps live. Without this the
+            // renderer falls back to a path relative to the working directory,
+            // which silently finds nothing when the binary is launched from
+            // anywhere but the repository root.
+            if (!hasValue) {
+                std::fprintf(stderr, "--assets needs a directory\n");
+                return 2;
+            }
+            assetDir = argv[++i];
         } else {
             std::fprintf(stderr, "unknown argument: %s\n\n", arg);
             printUsage(argv[0]);
@@ -125,6 +152,9 @@ int main(int argc, char **argv) {
     }
 
     emergent::NativeEngine engine;
+    if (!assetDir.empty()) {
+        engine.setSceneAssetDirectory(assetDir);
+    }
     const bool initialized = engine.initialize();
     if (!initialized) {
         std::fprintf(stderr, "Native engine initialization incomplete: %s\n",
@@ -150,6 +180,22 @@ int main(int argc, char **argv) {
         }
     }
 
+    // -- the streamed world ------------------------------------------------
+    if (scene) {
+        // Reportable without a GPU on purpose. The renderer used to draw instanced
+        // cubes because nothing connected the world generator to a vertex buffer;
+        // this is the line that proves the connection is made, and it is checked
+        // in CI where there is no Vulkan driver at all.
+        engine.buildWorld(seed);
+        engine.setStreamRadius(420.0);
+        std::printf("World seed %d: %zu buildings, %zu roads, %zu trees\n", seed,
+                    engine.world().buildings.size(), engine.world().roads.size(),
+                    engine.world().trees.size());
+        std::printf("Downtown: (%.0f, %.0f), %.1f buildings/hectare\n", engine.worldCentre().x,
+                    engine.worldCentre().z, engine.worldCentre().density);
+        std::printf("Material maps: %s\n", engine.sceneAssetDirectory().c_str());
+    }
+
     // -- render target -----------------------------------------------------
     bool rendering = false;
     if (wantRender) {
@@ -164,6 +210,14 @@ int main(int argc, char **argv) {
             std::printf("Render target %ux%u: %s (presents=%s, device=%s)\n", rs.width, rs.height,
                         rs.status.c_str(), engine.renderer().presentsToDisplay() ? "yes" : "no",
                         rs.hasDevice ? "yes" : "no");
+            // Say so either way. A silently untextured city looks like a
+            // material bug rather than a missing file, and the two have
+            // completely different fixes.
+            std::printf("Material maps: %s", rs.materialMapsLoaded ? "CC0 bake" : "NEUTRAL PLACEHOLDERS");
+            if (!rs.materialMapNote.empty()) {
+                std::printf(" (%s)", rs.materialMapNote.c_str());
+            }
+            std::printf("\n");
         } else {
             std::printf("Render target %ux%u NOT opened: %s\n", width, height,
                         engine.lastRenderError().c_str());
@@ -188,6 +242,16 @@ int main(int argc, char **argv) {
                     1000.0 / static_cast<double>(hz), 1000.0 * engine.loop().config().fixedDelta);
     } else if (realtime > 0.0) {
         ran = engine.runRealtime(realtime);
+    }
+
+    if (scene) {
+        // What the renderer would have been handed. Printed rather than asserted
+        // here so a human running the binary sees the same numbers CI checks.
+        const auto &st = engine.sceneStats();
+        std::printf("Scene slice: %u buildings, %u roads, %u props, %u trees, %u ground quads\n",
+                    st.buildings, st.roads, st.props, st.trees, st.groundQuads);
+        std::printf("Scene mesh: %u vertices, %u triangles, %u dropped for budget\n", st.vertices,
+                    st.triangles, st.buildingsDroppedForBudget);
     }
     if (frames > 0 || realtime > 0.0) {
         const auto &st = engine.frameStats();

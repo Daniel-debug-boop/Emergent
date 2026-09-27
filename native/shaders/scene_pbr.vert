@@ -21,22 +21,36 @@ layout(location = 2) in vec3 inColour;
 layout(location = 3) in float inMaterial;
 layout(location = 4) in vec2 inUv;
 
+// 96 bytes. The Vulkan guaranteed minimum for maxPushConstantsSize is 128, and
+// the limit is commonly 128 or 256 on real drivers, so this block is sized to
+// fit the guarantee rather than the machine it was written on. A `mat4 view`
+// used to sit here too, unused by both stages, and on its own it was the
+// difference between fitting and not.
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 view;
     vec3 cameraPosition;
     float time;
     float water;
-    // The material table, two vec4s per material. Baked in at compile time from
-    // kMaxMaterials so the uniform array and the table can never disagree about
-    // their size.
+} pc;
+
+// The material table, two vec4s per material, baked in at compile time from
+// kMaxMaterials so the uniform array and the table can never disagree about
+// their size.
+//
+// It is a uniform buffer and *not* push constants, which is the whole reason
+// this comment exists. At 64 materials the table is 2 KB; the guaranteed
+// minimum for maxPushConstantsSize is 128 bytes, and plenty of drivers cap at
+// 128 or 256. A material table in push constants does not render slightly
+// wrong, it fails pipeline creation — or worse, passes on the one machine whose
+// limit happens to be high and fails on every other one.
+layout(set = 1, binding = 1) uniform MaterialTable {
     vec4 materialA[EMERGENT_MAX_MATERIALS];
     vec4 materialB[EMERGENT_MAX_MATERIALS];
     int materialCount;
     int pad0;
     int pad1;
     int pad2;
-} pc;
+} materials;
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec3 vColour;
@@ -70,7 +84,7 @@ void main() {
     //
     // MapMode::Uv is the exception: an imported mesh brings its own coordinates
     // because no world-axis projection puts a wood grain along a tapered leg.
-    float mode = pc.materialB[vMaterial].x;
+    float mode = materials.materialB[vMaterial].x;
     vUseUv = step(3.5, mode);
     vec2 proj = p.xz;
     if (mode > 0.5 && mode < 1.5) {
@@ -78,5 +92,5 @@ void main() {
     } else if (mode > 1.5 && mode < 2.5) {
         proj = p.xy;
     }
-    vUv = mix(proj * pc.materialA[vMaterial].y, inUv, vUseUv);
+    vUv = mix(proj * materials.materialA[vMaterial].y, inUv, vUseUv);
 }

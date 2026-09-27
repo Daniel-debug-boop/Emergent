@@ -15,6 +15,11 @@
 
 #include "emergent/vulkan_backend.hpp"
 
+#include "emergent/atmosphere.hpp"
+#include "emergent/ktx2.hpp"
+#include "emergent/materials.hpp"
+#include "emergent/scene_mesh.hpp"
+
 // Vulkan's C structs are conventionally initialised as
 // `VkFooCreateInfo info{VK_STRUCTURE_TYPE_FOO};`, which zero-fills every other
 // member because they are C aggregates. That is the idiom in the Vulkan
@@ -32,6 +37,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -165,6 +171,24 @@ constexpr uint32_t kMaxJoints = 64;
 constexpr uint32_t kInstanceStride = 64;  // four vec4s
 constexpr float kClear[4] = {0.025f, 0.045f, 0.09f, 1.0f};
 
+/**
+ * Push constant range for the scene pipeline: 96 bytes.
+ *
+ * Sized to the Vulkan guaranteed minimum of 128 rather than to whatever the
+ * machine that wrote the shader happened to support. The material table that
+ * used to live here is 2 KB, and a `mat4 view` that no stage read pushed the
+ * block to 152 — over the guarantee on its own.
+ */
+constexpr uint32_t kScenePushBytes = 96;
+
+// The scene uniform block: sun direction and colour, sky and ground ambient,
+// fog colour and density, night factor, and whether the maps are real. 96 bytes
+// with the std140 vec3 padding the block actually occupies.
+constexpr uint32_t kSceneUniformFloats = 24;
+
+/** The neutral tile size, used only when the packed bake is not built. */
+constexpr uint32_t kPlaceholderTile = 32;
+
 } // namespace
 
 struct VulkanRenderBackend::Impl {
@@ -202,6 +226,75 @@ struct VulkanRenderBackend::Impl {
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
+    // -- the scene pipeline -------------------------------------------------
+    //
+    // Separate from the debug-cube pipeline above, and deliberately so. The cube
+    // path is one 28-byte vertex and one instanced draw; the scene path is the
+    // 48-byte layout, a real material table and three texture arrays. Merging
+    // them would mean a pipeline with both vertex layouts, which is legal and
+    // unreadable, and would put a shader that samples a material table into the
+    // path used to draw a debug marker.
+    VkShaderModule sceneVertModule = VK_NULL_HANDLE;
+    VkShaderModule sceneFragModule = VK_NULL_HANDLE;
+    VkPipelineLayout scenePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline scenePipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout sceneTexLayout = VK_NULL_HANDLE;    // set 0: the maps
+    VkDescriptorSetLayout sceneUniformLayout = VK_NULL_HANDLE; // set 1: scene + table
+    VkDescriptorSet sceneTexSet = VK_NULL_HANDLE;
+    VkDescriptorSet sceneUniformSet = VK_NULL_HANDLE;
+    VkDescriptorPool sceneDescriptorPool = VK_NULL_HANDLE;
+    VkSampler sceneSampler = VK_NULL_HANDLE;
+    VkImage sceneMaps[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory sceneMapMemory[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView sceneMapViews[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+    /**
+     * Layer count of the material maps, from the current table.
+     *
+     * Read at open() so the array is allocated once. Changing the table later
+     * with a different layer count needs a reallocation, and
+     * `setSceneMaterials` says so rather than silently uploading indices past
+     * the end of the array.
+     */
+    uint32_t sceneMaterialLayers() const { return static_cast<uint32_t>(::emergent::sharedMaterialTable().layers); }
+
+    /**
+     * Time of day, 0 at midnight and 0.5 at noon.
+     *
+     * Accumulated from the frame loop rather than read from a wall clock, so the
+     * sky is deterministic: the same sequence of frames always produces the same
+     * light, which is what makes a lighting bug reproducible.
+     */
+    float dayFraction = 0.30f;
+
+    // The assembled city: one static upload, one draw call.
+    VkBuffer sceneVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory sceneVertexMemory = VK_NULL_HANDLE;
+    uint32_t sceneVertexCount = 0;
+    // Per-frame uniforms, host-coherent and permanently mapped.
+    VkBuffer sceneUniformBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory sceneUniformMemory = VK_NULL_HANDLE;
+    float *sceneUniformData = nullptr;
+    VkBuffer materialBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory materialMemory = VK_NULL_HANDLE;
+    float *materialData = nullptr;
+    /**
+     * False until the CC0 bake is uploaded into the map arrays.
+     *
+     * Until then the arrays hold physically neutral values, so the scene draws,
+     * lights and fogs correctly but every surface is a flat mid-grey. Reported
+     * in the frame stats rather than left to be discovered by looking at a
+     * screenshot and wondering why nothing is textured.
+     */
+    bool sceneMapsLoaded = false;
+    /** Why the maps are placeholders, when they are. */
+    std::string sceneMapNote;
+    /** Layers the map arrays were actually allocated with. */
+    uint32_t sceneMapLayers = 0;
+    /** Size of the mapped scene vertex range, for growth without reallocating. */
+    VkDeviceSize sceneVertexBytes = 0;
+    void *sceneVertexMapped = nullptr;
+
     // Geometry and per-frame data
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
@@ -225,6 +318,14 @@ struct VulkanRenderBackend::Impl {
     VkFence inFlight = VK_NULL_HANDLE;
     bool recording = false;
 
+    /**
+     * The eye position, hoisted out of the camera block.
+     *
+     * The sky and the scene push constants both need it, and both are written
+     * outside the block that computes it. Recomputing it would be worse than
+     * storing it, because the two copies could disagree.
+     */
+    float eye[3] = {0.0f, 0.0f, 0.0f};
     float cameraYaw = 35.0f;
     float cameraPitch = 20.0f;
     float cameraDistance = 14.0f;
@@ -318,6 +419,709 @@ struct VulkanRenderBackend::Impl {
         }
     }
 
+    // -- the scene pipeline, built once at open() ---------------------------
+
+    /**
+     * Load the scene shaders, build its two descriptor sets and its pipeline.
+     *
+     * Failure here is not fatal. The debug-cube pipeline is still perfectly
+     * good for what it is for, and a developer on a machine without the
+     * SPIR-V built should still get a window and a status line rather than
+     * nothing at all. So this reports and returns, and the frame loop carries
+     * on drawing boxes.
+     */
+    bool buildScenePipeline(const std::string &shaderDir, std::string &errorOut) {
+        std::vector<uint32_t> vertCode, fragCode;
+        if (!loadSpirv(shaderDir + "/scene_pbr.vert.spv", vertCode) ||
+            !loadSpirv(shaderDir + "/scene_pbr.frag.spv", fragCode)) {
+            errorOut = "scene_pbr SPIR-V unavailable (build native/shaders to SPIR-V; "
+                       "the renderer will draw debug boxes only)";
+            return false;
+        }
+        if (!makeModule(vertCode, sceneVertModule) || !makeModule(fragCode, sceneFragModule)) {
+            errorOut = "vkCreateShaderModule failed for the scene stages";
+            return false;
+        }
+
+        // Set 0: the three material maps. Fragment only — a sampler in the
+        // vertex stage would need a different descriptor and buys nothing.
+        VkDescriptorSetLayoutBinding tex[3]{};
+        for (uint32_t i = 0; i < 3; ++i) {
+            tex[i].binding = i;
+            tex[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            tex[i].descriptorCount = 1;
+            tex[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo tdsl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        tdsl.bindingCount = 3;
+        tdsl.pBindings = tex;
+        if (vkCreateDescriptorSetLayout(dev(), &tdsl, nullptr, &sceneTexLayout) != VK_SUCCESS) {
+            errorOut = "vkCreateDescriptorSetLayout failed for the scene maps";
+            return false;
+        }
+
+        // Set 1: the per-frame scene block and the material table. Both stages
+        // read the table: the vertex stage needs the tile scale and the map
+        // mode, the fragment stage everything else.
+        VkDescriptorSetLayoutBinding uni[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            uni[i].binding = i;
+            uni[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uni[i].descriptorCount = 1;
+            uni[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo udsl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        udsl.bindingCount = 2;
+        udsl.pBindings = uni;
+        if (vkCreateDescriptorSetLayout(dev(), &udsl, nullptr, &sceneUniformLayout) != VK_SUCCESS) {
+            errorOut = "vkCreateDescriptorSetLayout failed for the scene uniforms";
+            return false;
+        }
+
+        VkDescriptorSetLayout layouts[2] = {sceneTexLayout, sceneUniformLayout};
+        VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                  kScenePushBytes};
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci.setLayoutCount = 2;
+        plci.pSetLayouts = layouts;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(dev(), &plci, nullptr, &scenePipelineLayout) != VK_SUCCESS) {
+            errorOut = "vkCreatePipelineLayout failed for the scene";
+            return false;
+        }
+
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = sceneVertModule;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = sceneFragModule;
+        stages[1].pName = "main";
+
+        // The 48-byte interleaved layout, matching scene_pbr.vert exactly.
+        VkVertexInputBindingDescription binding{0, kVertexBytes, VK_VERTEX_INPUT_RATE_VERTEX};
+        VkVertexInputAttributeDescription attrs[5] = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, kOffsetPosition * 4},
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, kOffsetNormal * 4},
+            {2, 0, VK_FORMAT_R32G32B32_SFLOAT, kOffsetColour * 4},
+            {3, 0, VK_FORMAT_R32_SFLOAT, kOffsetMaterial * 4},
+            {4, 0, VK_FORMAT_R32G32_SFLOAT, kOffsetUv * 4},
+        };
+        VkPipelineVertexInputStateCreateInfo vertexInput{
+            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &binding;
+        vertexInput.vertexAttributeDescriptionCount = 5;
+        vertexInput.pVertexAttributeDescriptions = attrs;
+
+        VkPipelineInputAssemblyStateCreateInfo assembly{
+            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkViewport viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+        VkRect2D scissor{{0, 0}, {width, height}};
+        VkPipelineViewportStateCreateInfo viewportState{
+            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+
+        VkPipelineRasterizationStateCreateInfo raster{
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        // Front faces are counter-clockwise, which is what the emitters produce.
+        raster.cullMode = VK_CULL_MODE_BACK_BIT;
+        raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo multisample{
+            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depth{
+            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        depth.depthTestEnable = VK_TRUE;
+        depth.depthWriteEnable = VK_TRUE;
+        depth.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        VkPipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{
+            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        blend.attachmentCount = 1;
+        blend.pAttachments = &blendAttachment;
+
+        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        gp.stageCount = 2;
+        gp.pStages = stages;
+        gp.pVertexInputState = &vertexInput;
+        gp.pInputAssemblyState = &assembly;
+        gp.pViewportState = &viewportState;
+        gp.pRasterizationState = &raster;
+        gp.pMultisampleState = &multisample;
+        gp.pDepthStencilState = &depth;
+        gp.pColorBlendState = &blend;
+        gp.layout = scenePipelineLayout;
+        gp.renderPass = renderPass;
+        gp.subpass = 0;
+        const VkResult created = vkCreateGraphicsPipelines(dev(), VK_NULL_HANDLE, 1, &gp, nullptr,
+                                                            &scenePipeline);
+        if (created != VK_SUCCESS) {
+            errorOut = "vkCreateGraphicsPipelines failed for the scene (" +
+                       std::to_string(static_cast<int>(created)) + ")";
+            return false;
+        }
+        return true;
+    }
+
+    bool loadSpirv(const std::string &path, std::vector<uint32_t> &out) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f) return false;
+        const std::streamsize size = f.tellg();
+        // A SPIR-V module is a sequence of 32-bit words, so a file whose size is
+        // not a multiple of four is not a module. Checking it here turns a
+        // truncated or HTML-error-page file into a clean "unavailable" rather
+        // than a validation-layer error deep inside vkCreateShaderModule.
+        if (size <= 0 || (size % 4) != 0) return false;
+        out.resize(static_cast<size_t>(size) / 4);
+        f.seekg(0);
+        f.read(reinterpret_cast<char *>(out.data()), size);
+        return f.good() || f.eof();
+    }
+
+    bool makeModule(const std::vector<uint32_t> &code, VkShaderModule &out) {
+        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        ci.codeSize = code.size() * 4;
+        ci.pCode = code.data();
+        return vkCreateShaderModule(dev(), &ci, nullptr, &out) == VK_SUCCESS;
+    }
+
+    /**
+     * The three material maps, from the packed CC0 bake when it is there.
+     *
+     * The three are not interchangeable, and the asymmetry is deliberate:
+     * albedo is a colour and is uploaded as VK_FORMAT_R8G8B8A8_SRGB so the
+     * hardware applies the transfer function before any lighting maths sees it,
+     * while the normal and AO/roughness/metalness maps are *data* and are
+     * uploaded as UNORM. Running a normal map through the sRGB curve bends it in
+     * a way no shader correction undoes, and the result is lighting that is
+     * subtly wrong in a way nobody can name.
+     *
+     * When the packed files are absent the maps are filled with physically
+     * neutral values instead: a mid-grey albedo, the tangent-space neutral
+     * normal, and AO 1 / roughness 0.5 / metal 0. That is the average material
+     * rather than a wrong one, so the scene still lights and fogs correctly, and
+     * `sceneMapsLoaded` stays false with a note saying why everything is grey. A
+     * renderer that refuses to draw until the asset pipeline is wired up is a
+     * renderer that looks broken.
+     */
+    bool createSceneMaps(uint32_t layers, const std::string &assetDir, std::string &errorOut) {
+        sceneMapLayers = layers;
+
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        // Repeat, because box mapping produces world coordinates far outside
+        // 0..1 and a clamp-to-edge sampler smears the last texel across every
+        // surface beyond the first tile.
+        sci.magFilter = VK_FILTER_LINEAR;
+        sci.minFilter = VK_FILTER_LINEAR;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy = 8.0f;
+        if (vkCreateSampler(dev(), &sci, nullptr, &sceneSampler) != VK_SUCCESS) {
+            errorOut = "vkCreateSampler failed";
+            return false;
+        }
+
+        // albedo, normal, arm. Albedo is sRGB; the other two are data.
+        const char *names[3] = {"albedo.ktx2", "normal.ktx2", "arm.ktx2"};
+        const VkFormat formats[3] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_UNORM,
+                                     VK_FORMAT_R8G8B8A8_UNORM};
+
+        Ktx2Image decoded[3];
+        bool haveRealMaps = true;
+        std::string loadError;
+        for (int m = 0; m < 3; ++m) {
+            const std::string path = assetDir + "/" + names[m];
+            if (!loadKtx2(path, decoded[m], loadError)) {
+                if (loadError.rfind("could not open", 0) == 0) {
+                    // Absent, not malformed. The packer has not been run.
+                    haveRealMaps = false;
+                    break;
+                }
+                errorOut = std::string(names[m]) + ": " + loadError;
+                return false;
+            }
+            if (decoded[m].layers != layers) {
+                errorOut = std::string(names[m]) + " has " + std::to_string(decoded[m].layers) +
+                           " layers but the material table has " + std::to_string(layers) +
+                           "; re-run npm run assets:textures";
+                return false;
+            }
+            if (decoded[m].vkFormat != formats[m]) {
+                // A mismatch means the packer and the renderer disagree about
+                // which maps are colour. Silently reinterpreting a UNORM normal
+                // map as sRGB, or the reverse, produces lighting that is wrong by
+                // a factor nobody can trace, so it is refused.
+                errorOut = std::string(names[m]) + " is vkFormat " +
+                           std::to_string(decoded[m].vkFormat) + ", expected " +
+                           std::to_string(formats[m]) +
+                           " (albedo is sRGB; normal and arm are linear data)";
+                return false;
+            }
+        }
+
+        for (int m = 0; m < 3; ++m) {
+            uint32_t mapWidth = kPlaceholderTile;
+            uint32_t mapHeight = kPlaceholderTile;
+            uint32_t mipLevels = 1;
+            if (haveRealMaps) {
+                mapWidth = decoded[m].width;
+                mapHeight = decoded[m].height;
+                mipLevels = decoded[m].levelCount;
+            }
+
+            VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            ici.imageType = VK_IMAGE_TYPE_2D;
+            ici.format = formats[m];
+            ici.extent = {mapWidth, mapHeight, 1};
+            ici.mipLevels = mipLevels;
+            ici.arrayLayers = layers;
+            ici.samples = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage(dev(), &ici, nullptr, &sceneMaps[m]) != VK_SUCCESS) {
+                errorOut = "vkCreateImage failed for a material map";
+                return false;
+            }
+            VkMemoryRequirements req{};
+            vkGetImageMemoryRequirements(dev(), sceneMaps[m], &req);
+            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            mai.allocationSize = req.size;
+            if (!findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                 mai.memoryTypeIndex)) {
+                errorOut = "no device-local memory type for a material map";
+                return false;
+            }
+            if (vkAllocateMemory(dev(), &mai, nullptr, &sceneMapMemory[m]) != VK_SUCCESS) {
+                errorOut = "vkAllocateMemory failed for a material map";
+                return false;
+            }
+            vkBindImageMemory(dev(), sceneMaps[m], sceneMapMemory[m], 0);
+
+            VkImageViewCreateInfo ivci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            ivci.image = sceneMaps[m];
+            ivci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            // The view format must match the image format. An SRGB view over a
+            // UNORM image is invalid, and a UNORM view over an SRGB image drops
+            // the transfer function, which is the whole reason albedo is sRGB.
+            ivci.format = formats[m];
+            ivci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, layers};
+            if (vkCreateImageView(dev(), &ivci, nullptr, &sceneMapViews[m]) != VK_SUCCESS) {
+                errorOut = "vkCreateImageView failed for a material map";
+                return false;
+            }
+
+            if (haveRealMaps) {
+                if (!uploadKtx2(decoded[m], sceneMaps[m], mipLevels)) {
+                    errorOut = std::string("uploading ") + names[m] + " failed";
+                    return false;
+                }
+            } else if (!uploadSolid(placeholderFor(m), sceneMaps[m], kPlaceholderTile, layers)) {
+                // The placeholder still has to be written: an undefined image is
+                // a validation error the first time it is sampled, and the scene
+                // has to draw *something*.
+                errorOut = "the material map staging upload failed";
+                return false;
+            }
+        }
+        sceneMapsLoaded = haveRealMaps;
+        if (!haveRealMaps) {
+            sceneMapNote = assetDir + " not found; run npm run assets:textures";
+        }
+        return true;
+    }
+
+    /** A physically neutral tile, for when the packed bake is not built. */
+    static std::vector<uint8_t> placeholderFor(int which) {
+        const size_t n = static_cast<size_t>(kPlaceholderTile) * kPlaceholderTile;
+        std::vector<uint8_t> px(n * 4, 0);
+        for (size_t i = 0; i < n; ++i) {
+            if (which == 0) {
+                // Mid grey: the average of a real material, and dark enough to be
+                // obviously untextured next to a wall that has brick on it.
+                px[i * 4 + 0] = 128; px[i * 4 + 1] = 128; px[i * 4 + 2] = 128; px[i * 4 + 3] = 255;
+            } else if (which == 1) {
+                // The tangent-space neutral normal: flat, pointing out of the surface.
+                px[i * 4 + 0] = 128; px[i * 4 + 1] = 128; px[i * 4 + 2] = 255; px[i * 4 + 3] = 255;
+            } else {
+                px[i * 4 + 0] = 255;  // AO 1
+                px[i * 4 + 1] = 128;  // roughness 0.5
+                px[i * 4 + 2] = 0;    // metal 0
+                px[i * 4 + 3] = 255;
+            }
+        }
+        return px;
+    }
+
+    /**
+     * Copy every mip level of a decoded KTX2 image into an array image.
+     *
+     * All levels go through one staging buffer and one command submission. The
+     * obvious alternative, a submission per level, would need a fence between
+     * them because the staging buffer is rewritten while the previous copy may
+     * still be reading it — and this upload is 26 layers x 10 mips x 3 maps, so
+     * 780 submissions is a startup stall nobody would diagnose.
+     *
+     * A level's layers are contiguous in the file, and `imageSubresource` may
+     * name the whole array, so one copy per mip covers all 26 layers: ten copies
+     * per map rather than 260.
+     */
+    bool uploadKtx2(const Ktx2Image &image, VkImage target, uint32_t mipLevels) {
+        size_t largest = 0;
+        for (const Ktx2Level &level : image.levels) {
+            largest = std::max(largest, level.pixels.size());
+        }
+        if (largest == 0) return false;
+
+        VkBuffer staging{};
+        VkDeviceMemory stagingMemory{};
+        void *mapped = nullptr;
+        if (!createHostBuffer(largest, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingMemory,
+                              &mapped)) {
+            return false;
+        }
+
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = pool();
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(dev(), &cai, &cmd) != VK_SUCCESS) {
+            vkDestroyBuffer(dev(), staging, nullptr);
+            vkFreeMemory(dev(), stagingMemory, nullptr);
+            return false;
+        }
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+
+        // One transition for the whole image, covering every mip and layer.
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = target;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, image.layers};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        for (uint32_t mip = 0; mip < image.levelCount && mip < mipLevels; ++mip) {
+            const Ktx2Level &level = image.levels[mip];
+            if (level.pixels.size() > largest) continue;
+            std::memcpy(mapped, level.pixels.data(), level.pixels.size());
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = 0;
+            copy.bufferRowLength = 0;
+            copy.bufferImageHeight = 0;
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, image.layers};
+            copy.imageOffset = {0, 0, 0};
+            copy.imageExtent = {level.width, level.height, 1};
+            vkCmdCopyBufferToImage(cmd, staging, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                   &copy);
+        }
+
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &barrier);
+
+        vkEndCommandBuffer(cmd);
+        VkFence fence{};
+        vkCreateFence(dev(), nullptr, nullptr, &fence);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(queue(), 1, &si, fence);
+        vkWaitForFences(dev(), 1, &fence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(dev(), fence, nullptr);
+        vkFreeCommandBuffers(dev(), pool(), 1, &cmd);
+        vkUnmapMemory(dev(), stagingMemory);
+        vkDestroyBuffer(dev(), staging, nullptr);
+        vkFreeMemory(dev(), stagingMemory, nullptr);
+        return true;
+    }
+
+    /** Copy a solid colour into every layer of an array image. */
+    bool uploadSolid(const std::vector<uint8_t> &tile, VkImage image, uint32_t tileSize, uint32_t layers) {
+        const VkDeviceSize bytes = tile.size();
+        VkBuffer staging{};
+        VkDeviceMemory stagingMemory{};
+        void *mapped = nullptr;
+        if (!createHostBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingMemory, &mapped)) {
+            return false;
+        }
+        std::memcpy(mapped, tile.data(), static_cast<size_t>(bytes));
+
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = pool();
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(dev(), &cai, &cmd) != VK_SUCCESS) {
+            vkDestroyBuffer(dev(), staging, nullptr);
+            vkFreeMemory(dev(), stagingMemory, nullptr);
+            return false;
+        }
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+
+        VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toDst.srcAccessMask = 0;
+        toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toDst.image = image;
+        toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &toDst);
+
+        VkBufferImageCopy copy{};
+        copy.bufferOffset = 0;
+        copy.bufferRowLength = 0;
+        copy.bufferImageHeight = 0;
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers};
+        copy.imageOffset = {0, 0, 0};
+        copy.imageExtent = {tileSize, tileSize, 1};
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+        VkImageMemoryBarrier toRead = toDst;
+        toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+        vkEndCommandBuffer(cmd);
+        VkFence fence{};
+        vkCreateFence(dev(), nullptr, nullptr, &fence);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(queue(), 1, &si, fence);
+        vkWaitForFences(dev(), 1, &fence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(dev(), fence, nullptr);
+        vkFreeCommandBuffers(dev(), pool(), 1, &cmd);
+        vkUnmapMemory(dev(), stagingMemory);
+        vkDestroyBuffer(dev(), staging, nullptr);
+        vkFreeMemory(dev(), stagingMemory, nullptr);
+        return true;
+    }
+
+    bool createSceneUniforms(const MaterialTable &materials, std::string &errorOut) {
+        // Scene block: 3 vec3 and 3 float, rounded up to a 16-byte multiple.
+        const VkDeviceSize sceneBytes = 96;
+        if (!createHostBuffer(sceneBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sceneUniformBuffer,
+                              sceneUniformMemory, reinterpret_cast<void **>(&sceneUniformData))) {
+            errorOut = "the scene uniform buffer could not be created";
+            return false;
+        }
+        // Material table: two vec4 per material, then the count. Sized from
+        // kMaxMaterials so the shader's compile-time array and this buffer can
+        // never disagree.
+        const VkDeviceSize tableBytes = static_cast<VkDeviceSize>(kMaxMaterials) * 2 * 16 + 16;
+        if (!createHostBuffer(tableBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, materialBuffer, materialMemory,
+                              reinterpret_cast<void **>(&materialData))) {
+            errorOut = "the material table buffer could not be created";
+            return false;
+        }
+        uploadMaterialTable(materials);
+
+        VkDescriptorPoolSize sizes[2]{};
+        sizes[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+        sizes[1] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2};
+        VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpci.maxSets = 2;
+        dpci.poolSizeCount = 2;
+        dpci.pPoolSizes = sizes;
+        // A pool of its own rather than sharing the debug path's. The debug pool
+        // is sized for two storage buffers and one set, and growing it to cover
+        // the scene's combined image samplers would put the scene's descriptor
+        // lifetime in the same object as the debug path's, so closing one would
+        // free the other's sets.
+        if (vkCreateDescriptorPool(dev(), &dpci, nullptr, &sceneDescriptorPool) != VK_SUCCESS) {
+            errorOut = "vkCreateDescriptorPool failed for the scene sets";
+            return false;
+        }
+
+        VkDescriptorSetLayout setLayouts[2] = {sceneTexLayout, sceneUniformLayout};
+        VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dsai.descriptorPool = sceneDescriptorPool;
+        dsai.descriptorSetCount = 2;
+        dsai.pSetLayouts = setLayouts;
+        VkDescriptorSet sets[2]{};
+        if (vkAllocateDescriptorSets(dev(), &dsai, sets) != VK_SUCCESS) {
+            errorOut = "vkAllocateDescriptorSets failed for the scene";
+            return false;
+        }
+        sceneTexSet = sets[0];
+        sceneUniformSet = sets[1];
+
+        VkDescriptorImageInfo images[3]{};
+        for (int m = 0; m < 3; ++m) {
+            images[m].sampler = sceneSampler;
+            images[m].imageView = sceneMapViews[m];
+            images[m].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        VkWriteDescriptorSet writes[3]{};
+        for (uint32_t i = 0; i < 3; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = sceneTexSet;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo = &images[i];
+        }
+        VkDescriptorBufferInfo buffers[2] = {
+            {sceneUniformBuffer, 0, VK_WHOLE_SIZE},
+            {materialBuffer, 0, VK_WHOLE_SIZE},
+        };
+        VkWriteDescriptorSet uniformWrites[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            uniformWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            uniformWrites[i].dstSet = sceneUniformSet;
+            uniformWrites[i].dstBinding = i;
+            uniformWrites[i].descriptorCount = 1;
+            uniformWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uniformWrites[i].pBufferInfo = &buffers[i];
+        }
+        VkWriteDescriptorSet all[5];
+        for (int i = 0; i < 3; ++i) all[i] = writes[i];
+        for (int i = 0; i < 2; ++i) all[3 + i] = uniformWrites[i];
+        vkUpdateDescriptorSets(dev(), 5, all, 0, nullptr);
+        return true;
+    }
+
+    void uploadMaterialTable(const MaterialTable &materials) {
+        std::memset(materialData, 0, static_cast<size_t>(kMaxMaterials) * 2 * 16 + 16);
+        const int32_t n = std::min<int32_t>(materials.count(), kMaxMaterials);
+        for (int32_t i = 0; i < n; ++i) {
+            std::memcpy(materialData + static_cast<size_t>(i) * 4, &materials.a[static_cast<size_t>(i) * 4],
+                        16);
+            std::memcpy(materialData + static_cast<size_t>(kMaxMaterials + i) * 4,
+                        &materials.b[static_cast<size_t>(i) * 4], 16);
+        }
+        // materialCount sits after both arrays. Passed as an int, and read as
+        // one, so there is no float/int reinterpretation to get wrong.
+        const int32_t count = n;
+        std::memcpy(materialData + static_cast<size_t>(kMaxMaterials) * 2 * 4, &count, 4);
+    }
+
+    /** Replace the scene geometry. Safe to call every frame with the same mesh. */
+    bool uploadSceneMesh(const SceneMesh &mesh, std::string &errorOut) {
+        const VkDeviceSize bytes = mesh.vertices.size() * sizeof(float);
+        if (bytes == 0) {
+            sceneVertexCount = 0;
+            return true;
+        }
+        if (bytes > sceneVertexBytes) {
+            if (sceneVertexBuffer) {
+                vkDestroyBuffer(dev(), sceneVertexBuffer, nullptr);
+                sceneVertexBuffer = VK_NULL_HANDLE;
+            }
+            if (sceneVertexMemory) {
+                vkFreeMemory(dev(), sceneVertexMemory, nullptr);
+                sceneVertexMemory = VK_NULL_HANDLE;
+            }
+            void *mapped = nullptr;
+            if (!createHostBuffer(bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, sceneVertexBuffer,
+                                  sceneVertexMemory, &mapped)) {
+                errorOut = "the scene vertex buffer could not be created";
+                return false;
+            }
+            sceneVertexMapped = mapped;
+            sceneVertexBytes = bytes;
+        }
+        std::memcpy(sceneVertexMapped, mesh.vertices.data(), static_cast<size_t>(bytes));
+        sceneVertexCount = mesh.vertexCount();
+        return true;
+    }
+
+    void destroyScenePipeline() {
+        if (!device || !device->initialized()) return;
+        if (sceneUniformData) {
+            vkUnmapMemory(dev(), sceneUniformMemory);
+            sceneUniformData = nullptr;
+        }
+        if (materialData) {
+            vkUnmapMemory(dev(), materialMemory);
+            materialData = nullptr;
+        }
+        for (int m = 0; m < 3; ++m) {
+            if (sceneMapViews[m]) vkDestroyImageView(dev(), sceneMapViews[m], nullptr);
+            if (sceneMaps[m]) vkDestroyImage(dev(), sceneMaps[m], nullptr);
+            if (sceneMapMemory[m]) vkFreeMemory(dev(), sceneMapMemory[m], nullptr);
+            sceneMapViews[m] = VK_NULL_HANDLE;
+            sceneMaps[m] = VK_NULL_HANDLE;
+            sceneMapMemory[m] = VK_NULL_HANDLE;
+        }
+        if (sceneSampler) {
+            vkDestroySampler(dev(), sceneSampler, nullptr);
+            sceneSampler = VK_NULL_HANDLE;
+        }
+        if (sceneVertexBuffer) vkDestroyBuffer(dev(), sceneVertexBuffer, nullptr);
+        if (sceneVertexMemory) vkFreeMemory(dev(), sceneVertexMemory, nullptr);
+        sceneVertexBuffer = VK_NULL_HANDLE;
+        sceneVertexMemory = VK_NULL_HANDLE;
+        sceneVertexBytes = 0;
+        sceneVertexMapped = nullptr;
+        sceneVertexCount = 0;
+        for (VkBuffer b : {sceneUniformBuffer, materialBuffer}) {
+            if (b) vkDestroyBuffer(dev(), b, nullptr);
+        }
+        sceneUniformBuffer = materialBuffer = VK_NULL_HANDLE;
+        for (VkPipeline p : {scenePipeline}) {
+            if (p) vkDestroyPipeline(dev(), p, nullptr);
+        }
+        scenePipeline = VK_NULL_HANDLE;
+        for (VkShaderModule m : {sceneVertModule, sceneFragModule}) {
+            if (m) vkDestroyShaderModule(dev(), m, nullptr);
+        }
+        sceneVertModule = sceneFragModule = VK_NULL_HANDLE;
+        if (scenePipelineLayout) {
+            vkDestroyPipelineLayout(dev(), scenePipelineLayout, nullptr);
+            scenePipelineLayout = VK_NULL_HANDLE;
+        }
+        for (VkDescriptorSetLayout l : {sceneTexLayout, sceneUniformLayout}) {
+            if (l) vkDestroyDescriptorSetLayout(dev(), l, nullptr);
+        }
+        sceneTexLayout = sceneUniformLayout = VK_NULL_HANDLE;
+        sceneTexSet = sceneUniformSet = VK_NULL_HANDLE;
+        if (sceneDescriptorPool) {
+            vkDestroyDescriptorPool(dev(), sceneDescriptorPool, nullptr);
+            sceneDescriptorPool = VK_NULL_HANDLE;
+        }
+    }
+
     void destroyAll() {
         if (!device || !device->initialized()) {
             ready = false;
@@ -327,6 +1131,7 @@ struct VulkanRenderBackend::Impl {
         // and the device is idle first. Skipping the wait is how a driver ends
         // up destroying a resource it is still executing.
         vkDeviceWaitIdle(dev());
+        destroyScenePipeline();
 
         if (inFlight) {
             vkDestroyFence(dev(), inFlight, nullptr);
@@ -405,6 +1210,35 @@ bool VulkanRenderBackend::initialize(VulkanBackend &device, const VulkanInitOpti
 }
 
 void VulkanRenderBackend::shutdownDevice() { close(); }
+
+bool VulkanRenderBackend::setSceneMesh(const SceneMesh &mesh) {
+    Impl &s = *impl_;
+    std::string error;
+    if (!s.uploadSceneMesh(mesh, error)) {
+        stats_.status = "scene upload failed: " + error;
+        return false;
+    }
+    return true;
+}
+
+bool VulkanRenderBackend::setSceneMaterials(const MaterialTable &materials) {
+    Impl &s = *impl_;
+    if (materials.layers > static_cast<int32_t>(s.sceneMapLayers)) {
+        // Rejected rather than clamped. Clamping leaves the shader indexing
+        // layers that exist but hold the placeholder, which looks like a texture
+        // bug in the material system instead of a bad call here.
+        stats_.status = "material table has " + std::to_string(materials.layers) +
+                        " layers but the maps hold " + std::to_string(s.sceneMapLayers);
+        return false;
+    }
+    ::emergent::sharedMaterialTable() = materials;
+    if (s.materialData) s.uploadMaterialTable(materials);
+    return true;
+}
+
+bool VulkanRenderBackend::sceneMapsLoaded() const { return impl_->sceneMapsLoaded; }
+
+const std::string &VulkanRenderBackend::materialMapNote() const { return impl_->sceneMapNote; }
 
 void VulkanRenderBackend::setCamera(float yawDegrees, float pitchDegrees, float distance) {
     impl_->cameraYaw = yawDegrees;
@@ -931,6 +1765,31 @@ bool VulkanRenderBackend::open(uint32_t width, uint32_t height, SurfaceProvider 
         vkUpdateDescriptorSets(dev, 2, writes, 0, nullptr);
     }
 
+    // -- the scene pipeline -------------------------------------------------
+    //
+    // Non-fatal, and deliberately so. Everything above is a hard failure because
+    // without it there is no renderer at all. This is a second renderer: if its
+    // SPIR-V is not built, or the driver refuses the pipeline, the backend keeps
+    // drawing the debug boxes and says why in stats().status. A developer
+    // without the Vulkan SDK should get a window and an explanation, not a
+    // silent black screen.
+    {
+        std::string sceneError;
+        if (s.buildScenePipeline(shaderDir_, sceneError)) {
+            if (!s.createSceneMaps(s.sceneMaterialLayers(), sceneAssetDirectory_, sceneError)) {
+                // The maps failed, so the pipeline is torn back down rather than
+                // left bound with an unbound sampler.
+                s.destroyScenePipeline();
+            } else if (!s.createSceneUniforms(::emergent::sharedMaterialTable(), sceneError)) {
+                s.destroyScenePipeline();
+            }
+        }
+        if (!sceneError.empty()) {
+            stats_.status = "scene pipeline unavailable: " + sceneError +
+                            "; the debug renderer is still active";
+        }
+    }
+
     // -- per-frame synchronisation -----------------------------------------
     {
         VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1095,11 +1954,10 @@ void VulkanRenderBackend::drawFrame(const FrameState &state) {
         const float yaw = s.cameraYaw * 0.01745329252f;
         const float pitch = s.cameraPitch * 0.01745329252f;
         const float d = s.cameraDistance;
-        const float eye[3] = {
-            state.cameraTarget[0] + std::cos(pitch) * std::sin(yaw) * d,
-            state.cameraTarget[1] + std::sin(pitch) * d,
-            state.cameraTarget[2] + std::cos(pitch) * std::cos(yaw) * d,
-        };
+        s.eye[0] = state.cameraTarget[0] + std::cos(pitch) * std::sin(yaw) * d;
+        s.eye[1] = state.cameraTarget[1] + std::sin(pitch) * d;
+        s.eye[2] = state.cameraTarget[2] + std::cos(pitch) * std::cos(yaw) * d;
+        const float *eye = s.eye;
         const float up[3] = {0.0f, 1.0f, 0.0f};
         float view[16];
         float proj[16];
@@ -1110,6 +1968,39 @@ void VulkanRenderBackend::drawFrame(const FrameState &state) {
         const float aspect = (s.height > 0) ? static_cast<float>(s.width) / static_cast<float>(s.height) : 1.0f;
         perspective(0.9599310886f /* 55 degrees */, aspect, 0.1f, 400.0f, proj);
         multiply(proj, view, s.viewProjection);
+    }
+
+    // -- the sky ------------------------------------------------------------
+    //
+    // Evaluated on the CPU and handed to the shader as four colours and a fog
+    // density, rather than being computed per pixel on the GPU. The model is
+    // tested, the GPU version would not be, and both halves of the game would
+    // then disagree about what colour the sun is. One source of truth.
+    if (s.sceneUniformData) {
+        // 24 hours in 8 minutes. Long enough to watch a day change, short enough
+        // that a developer does not have to wait an hour to see a sunset.
+        s.dayFraction += 1.0f / (8.0f * 60.0f * 24.0f);
+        s.dayFraction -= std::floor(s.dayFraction);
+
+        const Vec3 view{state.cameraTarget[0], 0.0f, state.cameraTarget[2]};
+        const SkyState sky = evaluateSky(view, s.dayFraction);
+        float *v = s.sceneUniformData;
+        auto put = [&v](int i, float a, float b, float c) {
+            v[i] = a; v[i + 1] = b; v[i + 2] = c; v[i + 3] = 0.0f;
+        };
+        put(0, sky.sunDirection.x, sky.sunDirection.y, sky.sunDirection.z);
+        put(4, sky.sunIrradiance.x, sky.sunIrradiance.y, sky.sunIrradiance.z);
+        put(8, sky.skyAmbient.x, sky.skyAmbient.y, sky.skyAmbient.z);
+        put(12, sky.groundAmbient.x, sky.groundAmbient.y, sky.groundAmbient.z);
+        // The fog converges to the sky behind it, so it is sampled from the same
+        // model rather than being a separate constant. If the two disagree the
+        // horizon shows a seam, which is the single most obvious tell that a
+        // renderer fakes its fog.
+        put(16, sky.horizonColor.x, sky.horizonColor.y, sky.horizonColor.z);
+        v[20] = 0.00016f;  // fog density
+        v[21] = 1.0f - sky.dayFactor;
+        v[22] = s.sceneMapsLoaded ? 1.0f : 0.0f;
+        v[23] = 0.0f;
     }
 
     // The character's world transform: the pose matrices are rig-model-space,
@@ -1124,6 +2015,9 @@ void VulkanRenderBackend::drawFrame(const FrameState &state) {
 
     std::memcpy(s.pushConstants, s.viewProjection, 64);
     std::memcpy(s.pushConstants + 16, s.character, 64);
+
+    stats_.materialMapsLoaded = s.sceneMapsLoaded;
+    stats_.materialMapNote = s.sceneMapNote;
 
     // -- record -----------------------------------------------------------
     vkResetCommandBuffer(s.command, 0);
@@ -1170,6 +2064,38 @@ void VulkanRenderBackend::drawFrame(const FrameState &state) {
     rpbi.pClearValues = clears;
     vkCmdBeginRenderPass(s.command, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
+    // The city first, so the debug boxes draw over it and a physics problem is
+    // visible against the world rather than floating in a void.
+    if (s.scenePipeline != VK_NULL_HANDLE && s.sceneVertexCount > 0) {
+        float push[kScenePushBytes / 4] = {};
+        std::memcpy(push, s.viewProjection, 64);
+        // The camera position, at byte offset 64: the mat4 is 16-byte aligned
+        // and takes the first 64 bytes, and a vec3 in a push constant block
+        // starts on the next 16-byte boundary. Getting this offset wrong
+        // produces a camera at the origin, which looks like a fog bug.
+        push[16] = s.eye[0];
+        push[17] = s.eye[1];
+        push[18] = s.eye[2];
+        push[19] = 0.0f;
+        push[20] = 0.0f;  // time
+        push[21] = 0.0f;  // water
+
+        vkCmdBindPipeline(s.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.scenePipeline);
+        VkDescriptorSet sceneSets[2] = {s.sceneTexSet, s.sceneUniformSet};
+        vkCmdBindDescriptorSets(s.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.scenePipelineLayout, 0, 2,
+                                sceneSets, 0, nullptr);
+        const VkDeviceSize sceneOffset = 0;
+        vkCmdBindVertexBuffers(s.command, 0, 1, &s.sceneVertexBuffer, &sceneOffset);
+        vkCmdPushConstants(s.command, s.scenePipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           kScenePushBytes, push);
+        // One draw for the whole slice. The material table is a uniform and the
+        // index is per vertex, so there is nothing to sort by and no reason to
+        // split the city into per-material batches.
+        vkCmdDraw(s.command, s.sceneVertexCount, 1, 0, 0);
+        stats_.drawnTriangles += s.sceneVertexCount / 3;
+    }
+
     if (s.instanceCount > 0) {
         vkCmdBindPipeline(s.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipeline);
         vkCmdBindDescriptorSets(s.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipelineLayout, 0, 1, &s.descriptorSet,
@@ -1180,6 +2106,7 @@ void VulkanRenderBackend::drawFrame(const FrameState &state) {
         // One instanced draw covers the scene and the skeleton: both are the
         // same cube, differing only in which instance record they read.
         vkCmdDraw(s.command, s.vertexCount, s.instanceCount, 0, 0);
+        stats_.drawnBoxes += s.vertexCount / 3 * s.instanceCount;
     }
 
     vkCmdEndRenderPass(s.command);

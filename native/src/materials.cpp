@@ -2,6 +2,14 @@
 
 #include "emergent/materials.hpp"
 
+// The generated bake table. Present only after `npm run assets:textures`; the
+// fallback below is what makes that a build-output dependency rather than a
+// source dependency.
+#if __has_include("materials.gen.hpp")
+#include "materials.gen.hpp"
+#define EMERGENT_HAVE_BAKED_MATERIALS 1
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -130,5 +138,89 @@ MaterialTable buildMaterialTable(const MaterialArrays &arrays,
 }
 
 MapMode mapModeFor(const std::string &role) { return mapModeForRole(role); }
+
+
+MaterialTable defaultMaterialTable() {
+    MaterialArrays arrays;
+    arrays.layers = 26;
+    arrays.size = 512;
+
+    // The same 26 ids the bake produces, in the same order, so the untextured
+    // fallback and the real table agree on what a material is *called*.
+    //
+    // They have to. The geometry kit and the scene assembler resolve ids through
+    // `MaterialTable::index`, which aborts the process on an unknown one — so a
+    // fallback that invented convenient names ("terrain", "pavement") would let a
+    // clean checkout build and then crash the moment the real table arrived,
+    // with the abort pointing at the material system rather than at the table
+    // that changed underneath it.
+    const char *texturedIds[] = {
+        "road_asphalt", "road_asphalt_worn", "pavement_concrete", "pavement_pavers",
+        "street_cobble", "ground_gravel",    "wall_brick",       "wall_brick_dark",
+        "wall_plaster",  "wall_plaster_dirty", "wall_concrete",  "wall_painted_concrete",
+        "wall_stone",    "wall_siding",      "wall_metal_shutter", "wall_corrugated",
+        "metal_rust",    "metal_plate",      "terrain_grass",    "terrain_dirt",
+        "terrain_mud",    "terrain_rock",    "terrain_sand",     "floor_concrete",
+        "floor_wood",     "floor_tile",
+    };
+    std::vector<Material> textured;
+    int32_t layer = 0;
+    for (const char *id : texturedIds) {
+        Material m;
+        m.id = id;
+        m.textured = true;
+        m.layer = layer++;
+        m.invTileScale = 3.0f;
+        m.roughness = 0.8f;
+        m.metallic = 0.0f;
+        // The map mode is what makes a road tile as ground and a facade as a
+        // wall, so the fallback has it right even though its texture is flat.
+        const std::string name(id);
+        m.mapMode = (name == "road_asphalt" || name == "terrain" || name == "pavement")
+                        ? MapMode::Ground
+                        : MapMode::WallX;
+        textured.push_back(m);
+    }
+    return buildMaterialTable(arrays, textured);
+}
+
+MaterialTable buildBakedMaterialTable() {
+#ifdef EMERGENT_HAVE_BAKED_MATERIALS
+    // The 26 CC0 materials, in layer order, followed by the solids. Textured
+    // entries first so a material index and a texture layer index are both small
+    // and the shader's dynamic index into a 64-entry table stays predictable.
+    MaterialArrays arrays;
+    arrays.layers = kBakedLayers;
+    arrays.size = kBakedSize;
+
+    std::vector<Material> textured;
+    textured.reserve(kBakedMaterialCount);
+    for (int i = 0; i < kBakedMaterialCount; ++i) {
+        const BakedMaterial &b = kBakedMaterials[i];
+        Material m;
+        m.id = b.id;
+        m.textured = true;
+        m.layer = b.layer;
+        m.invTileScale = b.invTileScale;
+        m.roughness = b.roughness;
+        m.metallic = b.metallic;
+        m.mapMode = b.mapMode;
+        m.normalStrength = b.normalStrength;
+        textured.push_back(m);
+    }
+    return buildMaterialTable(arrays, textured);
+#else
+    // The generated header has not been built. The solids alone still work, and
+    // the scene still draws and lights correctly, with every surface untextured.
+    // Failing here instead would mean `cmake --build` cannot run before an asset
+    // pipeline, which is a worse trade than a grey world that says it is grey.
+    return defaultMaterialTable();
+#endif
+}
+
+MaterialTable &sharedMaterialTable() {
+    static MaterialTable table = buildBakedMaterialTable();
+    return table;
+}
 
 }  // namespace emergent

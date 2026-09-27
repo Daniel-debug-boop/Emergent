@@ -2,9 +2,11 @@
   "name": "emergent",
   "version": "2.0.0",
   "type": "module",
-  "description": "EMERGENT — procedural 3D open-world game",
+  "description": "EMERGENT \u2014 procedural 3D open-world game",
   "scripts": {
-    "test": "npm run test:world && npm run test:math && npm run test:culling && npm run test:missions && npm run test:geometry && npm run test:shaders && npm run test:shading && npm run test:physics && npm run test:input && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test": "npm run test:native-shaders && npm run test:asset-pack && npm run test:world && npm run test:math && npm run test:culling && npm run test:missions && npm run test:geometry && npm run test:shaders && npm run test:shading && npm run test:budget && npm run test:models && npm run test:physics && npm run test:input && npm run test:project && npm run test:tooling && npm run test:runtime",
+    "test:native-shaders": "node test_native_shaders.mjs",
+    "test:asset-pack": "node test_asset_pack.mjs",
     "test:world": "node test_world.mjs",
     "test:math": "node test_math3d.mjs",
     "test:culling": "node test_culling.mjs",
@@ -14,7 +16,7 @@
     "test:project": "node test_project.mjs",
     "test:tooling": "node test_tooling.mjs",
     "test:runtime": "node test_headless_game.mjs",
-    "check": "node --check game3d.js && node --check geometry.mjs && node --check city.mjs && node --check materials.mjs && node --check textures.mjs",
+    "check": "node --check game3d.js && node --check geometry.mjs && node --check city.mjs && node --check materials.mjs && node --check textures.mjs && node --check budget.mjs && node --check gltf.mjs && node --check lod.mjs && node --check interiors.mjs && node --check assets/models.mjs",
     "dev": "node tools/serve.mjs",
     "build": "node tools/build.mjs",
     "bench": "node tools/headless_runtime.mjs --frames=300",
@@ -23,12 +25,16 @@
     "test:geometry": "node test_geometry.mjs",
     "test:shaders": "node test_shaders.mjs",
     "test:shading": "node test_shading.mjs",
+    "test:budget": "node test_budget.mjs",
+    "test:models": "node test_models.mjs",
     "assets:fetch": "node tools/assets/fetch.mjs",
     "assets:bake": "node tools/assets/bake.mjs",
     "assets:probe": "node tools/assets/probe.mjs",
     "test:fixture": "node tools/gen_world_fixture.mjs",
     "assets:models": "node tools/assets/models.js",
-    "assets:audit": "node tools/assets/audit.mjs"
+    "assets:audit": "node tools/assets/audit.mjs",
+    "assets:textures": "node tools/assets/textures.mjs",
+    "assets:fixture": "node tools/assets/fixture.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0"

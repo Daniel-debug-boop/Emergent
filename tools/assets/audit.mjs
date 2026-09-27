@@ -32,6 +32,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { MATERIALS, LICENSE, PROVIDER, TEXTURE_SIZE, TEXTURE_ARRAYS, RUNTIME_DIR } from '../../assets/database.mjs';
+import { MODELS as MODEL_SPECS } from '../../assets/models.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const TEXTURE_DIR = path.join(ROOT, RUNTIME_DIR);
@@ -68,8 +69,124 @@ async function main() {
     }
   }
   for (const a of prov.assets) {
-    if (!MATERIALS.some(m => m.id === a.asset_id)) {
-      fail(`${a.asset_id}: provenance exists for a material the database does not name — remove it or add the material`);
+    const knownMaterial = MATERIALS.some(m => m.id === a.asset_id);
+    const knownModel = MODEL_SPECS.some(m => m.id === a.asset_id);
+    if (!knownMaterial && !knownModel) {
+      fail(`${a.asset_id}: provenance exists for an asset neither database names — remove it or add the asset`);
+    }
+  }
+
+  // -- 2b. model provenance and the generated module -------------------------
+  // The model pipeline writes into the same provenance file, so it needs the
+  // same treatment. A model with no record is a model whose licence nobody can
+  // attest to, and that is the one thing this file exists to prevent.
+  const modelIds = new Set(MODEL_SPECS.map(m => m.id));
+  for (const m of MODEL_SPECS) {
+    const p = byId.get(m.id);
+    if (!p) { fail(`${m.id}: no provenance record`); continue; }
+    if (p.license !== 'CC0') fail(`${m.id}: licence is '${p.license}', not CC0`);
+    if (!p.license_url) fail(`${m.id}: no licence URL recorded`);
+    if (!p.creator) fail(`${m.id}: no creator recorded`);
+    if (!p.source_url || !p.source_url.startsWith(PROVIDER.url)) {
+      fail(`${m.id}: source URL ${p.source_url} is not on ${PROVIDER.url}`);
+    }
+    if (!p.fetched || !/^\d{4}-\d{2}-\d{2}$/.test(p.fetched)) {
+      fail(`${m.id}: no fetch date in YYYY-MM-DD form`);
+    }
+    if (!p.files || !p.files.length) fail(`${m.id}: no downloaded files recorded`);
+    for (const f of p.files || []) {
+      if (!f.md5) fail(`${m.id}: ${f.role} has no md5 to verify against`);
+      // Model binaries are served from the CDN host `dl.polyhaven.org`, not the
+      // site root, so the check is against the provider's *hosts* rather than
+      // its page URL. Two earlier versions got this wrong: one compared against
+      // `polyhaven.com` and the next against `.com` only, and between them they
+      // failed every single file — which reads as a licensing problem rather
+      // than a bad prefix. A check that fails on all inputs is not a check.
+      if (!f.source_url || !/^https:\/\/(dl\.)?polyhaven\.(com|org)\//.test(f.source_url)) {
+        fail(`${m.id}: ${f.role} was not downloaded from a Poly Haven host (${f.source_url})`);
+      }
+    }
+    if (!p.lod_count) fail(`${m.id}: no LOD count recorded — the chain did not run`);
+    if (!p.runtime_path) fail(`${m.id}: no runtime path recorded`);
+  }
+
+  // Every curated model must actually be in the generated module, or the
+  // database is describing assets that do not ship.
+  const genPath = path.join(ROOT, 'assets', 'models.gen.mjs');
+  if (!existsSync(genPath)) {
+    fail('assets/models.gen.mjs is missing — run `npm run assets:models`');
+  } else {
+    const gen = await readFile(genPath, 'utf8');
+    for (const m of MODEL_SPECS) {
+      if (!gen.includes(`"${m.id}"`)) {
+        fail(`${m.id}: is curated but absent from the generated module — re-run \`npm run assets:models\``);
+      }
+    }
+    if (gen.includes('undefined') && /:\s*undefined/.test(gen)) {
+      fail('assets/models.gen.mjs contains an undefined value — the bake wrote a partial set');
+    }
+  }
+
+  // -- 2b. the native pack --------------------------------------------------
+  //
+  // The native renderer loads build/native-assets/*.ktx2, which nothing else
+  // reads. Without a check here, a stale pack is invisible: the descriptor and
+  // the PNGs stay correct, the C++ table regenerates from the descriptor, and
+  // the GPU is the first thing to notice that layer 9 is last week's asphalt.
+  const nativeDir = path.join(ROOT, 'build', 'native-assets');
+  const NATIVE_MAPS = [
+    { key: 'albedo', srgb: true },
+    { key: 'normal', srgb: false },
+    { key: 'arm', srgb: false },
+  ];
+  let nativeBytes = 0;
+  const descSize = MATERIALS.length ? 512 : 0;
+  if (!existsSync(nativeDir)) {
+    notes.push('build/native-assets is absent — the native renderer will fall back to '
+      + 'neutral placeholders; run `npm run assets:textures`');
+  } else {
+    for (const map of NATIVE_MAPS) {
+      const p = path.join(nativeDir, `${map.key}.ktx2`);
+      if (!existsSync(p)) {
+        fail(`build/native-assets/${map.key}.ktx2 is missing — re-run \`npm run assets:textures\``);
+        continue;
+      }
+      const bytes = await readFile(p);
+      // The 12-byte identifier, then vkFormat at offset 12.
+      if (bytes.length < 80 || bytes.subarray(0, 4).toString('hex') !== 'ab4b5458') {
+        fail(`${map.key}.ktx2 is not a KTX2 container`);
+        continue;
+      }
+      const vkFormat = bytes.readUInt32LE(12);
+      const layers = bytes.readUInt32LE(32);
+      const levels = bytes.readUInt32LE(40);
+      const scheme = bytes.readUInt32LE(44);
+      const wantFormat = map.srgb ? 43 : 37;   // R8G8B8A8_SRGB / _UNORM
+      if (vkFormat !== wantFormat) {
+        fail(`${map.key}.ktx2 is vkFormat ${vkFormat}, expected ${wantFormat} `
+          + `(albedo is sRGB; normal and arm are linear data)`);
+      }
+      if (layers !== MATERIALS.length) {
+        fail(`${map.key}.ktx2 has ${layers} layers but the descriptor has `
+          + `${MATERIALS.length} — re-run \`npm run assets:textures\``);
+      }
+      if (levels < 2) {
+        fail(`${map.key}.ktx2 has ${levels} mip level(s); a material without a chain `
+          + 'shimmers at distance');
+      }
+      if (scheme !== 2) {
+        fail(`${map.key}.ktx2 uses supercompression ${scheme}, expected 2 (zstd). `
+          + 'Without zstd the pack is 415 MB rather than 50 MB.');
+      }
+      // Licence inside the container, so a file carries its own credit.
+      if (!bytes.includes(Buffer.from('EMERGENTlicense'))) {
+        fail(`${map.key}.ktx2 does not carry its licence in the KVD block`);
+      }
+      nativeBytes += bytes.length;
+    }
+    if (!problems.length) {
+      notes.push(`native pack  ${NATIVE_MAPS.length} KTX2 maps, `
+        + `${(nativeBytes / 1048576).toFixed(1)} MB, ${descSize}px, zstd, licence in-container`);
     }
   }
 

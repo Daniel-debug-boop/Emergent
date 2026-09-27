@@ -339,12 +339,232 @@ no implementation of it exists in this tree, so the swapchain branch of
 `VulkanRenderBackend` is unexercised. The offscreen branch does not need a
 window and will be the first thing to work on a GPU machine.
 
-## Still not integrated
+## 2026-09-27 — the renderer stopped drawing cubes
 
-**KTX / Basis Universal.** A compressed-texture path needs authored `.ktx2`
-assets to decode. This tree has no texture assets, and there is no GPU here to
-validate an upload against, so the result would be a decoder with nothing to
-decode. Not attempted.
+### What changed
+
+`VulkanRenderBackend` used to draw instanced unit cubes. It worked, it was
+visible on screen, and nothing reported a problem — because the cube path was
+never wrong, it was just not the game. Three layers were missing between the
+world generator and the pixels, and all three are now in place:
+
+1. **`scene_mesh` — the world, as a drawable mesh.** `buildSceneMesh()` takes a
+   `World` and emits the exact 48-byte interleaved buffer `scene_pbr.vert`
+   reads: ground with real slope normals, roads, buildings with plinths, window
+   openings, sills, string courses, doors, signage, parapets and roof plant,
+   street furniture, trees, and water. One draw call, because the material table
+   is a uniform and the index is per vertex, so there is nothing to sort by.
+2. **`worldCentre()`** — the generated world is not centred on the origin. For
+   seed 7 the nearest building to `(0,0)` is 424 m away and downtown is at
+   `(728, 1288)`. A streamer centred on the origin streams nothing, a spawn
+   point at the origin is in a field, and the player has to walk to the city
+   before seeing any of it. The centre is now computed from a two-pass density
+   grid, and `FrameLoop::setSpawn()` puts the player there.
+3. **A second Vulkan pipeline** — `scene_pbr` with the 48-byte vertex layout,
+   three `sampler2DArray` maps, a material table UBO and a per-frame scene
+   uniform block, drawn before the debug boxes so a physics problem is visible
+   against the world rather than floating in a void.
+
+### Verified here
+
+`ctest`: **14/14**, including two new suites.
+
+- **`emergent_atmosphere`** (14 tests, 7,317 checks) — a Preetham/Wallner
+  single-scattering sky with Mie, ozone and a night model that cross-fades
+  rather than switches. Asserts the physical properties, not a golden image:
+  the zenith is bluer than it is red, the horizon is brighter than the zenith
+  and whiter, a low sun warms the haze in its own direction and not the
+  opposite one, twilight does not pop, and direct sunlight is *exactly* zero at
+  midnight.
+- **`emergent_scene_mesh`** (12 tests, 33.5M checks) — walks the whole vertex
+  buffer and asserts what a GPU would otherwise only report as a black pixel:
+  every material index inside the table, every normal unit length, every
+  component finite, the bounds containing every vertex, the radius actually
+  bounding the slice, the triangle budget actually firing, and the facade detail
+  levels actually increasing geometry.
+- **`emergent_native_scene_stream`** — runs the shipped binary and asserts a
+  city reached the renderer: `28 buildings, 210,628 triangles` for seed 7.
+- **`test_native_shaders.mjs`** (61 checks) — parses all six GLSL files with a
+  real parser and asserts the things that make a pipeline uncreatable.
+
+Three defects were found by these tests while they were being written, and each
+is worth recording because each was invisible before:
+
+| Defect | Symptom it would have had |
+|---|---|
+| `saturate()` around `asin(sinAlt)` in `sunDirection` | the sun could never set; the world was lit at midnight |
+| `pow(negative, -1.253)` in the air-mass fit | NaN for every downward-looking direction |
+| The budget compared an *emission count* against a *triangle* ceiling | the budget never once fired, and the test meant to prove it worked proved nothing |
+
+### Two shader defects, found without a GPU
+
+The scene shaders had never been referenced by any code, so neither had ever
+been compiled by anything. `glslc` is optional here and absent, and the
+renderer's response to missing SPIR-V is to report "shader module unavailable"
+— which is exactly what a shader with a syntax error also looks like. So
+`test_native_shaders.mjs` parses them in Node instead.
+
+It immediately found two things that would have failed on real hardware:
+
+- **The material table was in push constants.** 64 materials × 2 vec4 is
+  2 KB. The Vulkan guaranteed minimum for `maxPushConstantsSize` is 128 bytes,
+  and plenty of drivers cap at 128 or 256. Moved to a UBO at set 1 binding 1.
+- **A `mat4 view` no stage read.** With the table gone the block was still 152
+  bytes, over the guarantee on its own. Removing the unused member brings it to
+  96.
+
+Neither would have shown up as "wrong colours". Both are
+`vkCreateGraphicsPipelines` failures, or a pass on the one machine whose limit
+happens to be high and a failure everywhere else.
+
+### FINAL HARDWARE VALIDATION REQUIRED
+
+None of the following has ever executed. There is no `/dev/dri` and no
+`/usr/share/vulkan/icd.d` in this environment, so there is no driver to
+execute against:
+
+- Every line of `vulkan_render.cpp`'s scene path: descriptor sets, the material
+  table upload, the three array images, the push constants, the draw call.
+- Whether the city is *visible*. The tests assert the buffer is correct; they
+  cannot assert the camera is pointed at it.
+- Whether back-face culling is wound correctly. `MeshBuilder` documents the
+  convention and the pipeline sets `VK_CULL_MODE_BACK_BIT`, but a winding error
+  is only observable as an inside-out building.
+- Frame cost. 210k triangles for a 420 m slice is a number, not a measurement.
+
+### What is still not integrated
+
+Nothing in the material path. The 26 CC0 Poly Haven materials are now in the
+native renderer, described in the next section.
+
+## 2026-09-27 — KTX2 decoding and the 26 CC0 materials in the native renderer
+
+### What changed
+
+The native scene pipeline used to allocate three `sampler2DArray` maps of the
+right shape and fill them with physically neutral values: mid-grey albedo, the
+tangent-space neutral normal, AO 1 / roughness 0.5 / metal 0. That is the
+average material, not a wrong one, so the scene lit, fogged and shaded
+correctly from the first frame — but it was the average material, and the whole
+point of a CC0 material library is to not ship the average. Four pieces:
+
+1. **`tools/assets/png.mjs`** — a PNG decoder for exactly what the bake emits:
+   78 files, all 1024×1024, 8-bit, colour type 3. All five scanline filters,
+   Adam7 rejected by name rather than mis-decoded, plus a box resampler and a
+   mip chain. It exists because the alternatives are a dependency, a WASM
+   transcoder, or a build host that is not available from this environment.
+2. **`tools/assets/ktx2.mjs`** — the container. Header, level index, data
+   format descriptor, key/value block, supercompression global data, and a full
+   mip chain per layer, zstd-compressed with the content checksum **on**.
+3. **`native/src/ktx2.cpp`** — the reader. No KTX dependency: it parses the
+   header, level index, DFD and KVD itself and uses the vendored `libzstd` for
+   the payload. It accepts supercompression scheme 2 and none, and names
+   everything it rejects.
+4. **`assets/materials.gen.hpp`** — the 26 materials as a C++ table, generated
+   from the bake manifest so the native side needs no JSON parser and a
+   malformed manifest is a build failure rather than a wall that comes out grey.
+   Layer indices come from the manifest, not from filename order: a re-bake that
+   reordered the list would otherwise repoint every wall at the wrong texture
+   with no error anywhere.
+
+CMake now runs the packer as part of the build, so a clean configure produces
+the real 50 MB of packs and the real table, and `ctest` validates them.
+
+### Verified here
+
+`ctest`: **17/17**. `test_asset_pack.mjs`: **94 checks**.
+
+- **`emergent_ktx2_test`** (76 checks) — decodes a committed fixture and
+  compares every texel byte-exact, then corrupts the file at eight different
+  offsets and requires every one to be rejected. Three of those offsets are
+  *inside* the zstd frame, which is only detectable because the writer enables
+  the content checksum. It also decodes the three real 50 MB packs and validates
+  layer count, dimensions, mip count and the DFD against what the table expects.
+- **`test_asset_pack.mjs`** (94 checks) — round-trips all five PNG filters
+  against an encoder written independently in the test file, so a shared
+  misunderstanding of the spec cannot pass; checks the DFD is 92 bytes (a real
+  KTX2 file's `0x5C`, and 24 would overflow the buffer by four bytes), the level
+  index, and that the writer is deterministic. The KVD block is *walked* using
+  only its own length fields rather than at hard-coded offsets, which is both
+  stronger (a wrong length desyncs the walk) and the reason a dropped entry
+  produces a named failure instead of an out-of-range exception that takes the
+  rest of the suite with it.
+
+Three controls, because a test that cannot fail proves nothing. Making the
+Paeth predictor return `a` instead of `c` fails filter 4 and only filter 4.
+Dropping the `KTXwriter` entry fails three named checks. Padding the KVD to two
+bytes instead of four makes the walk report a 2,002,277,451-byte entry — which
+is what a reader would actually see from a misaligned container.
+
+Two more ctests cover the last piece of the plumbing, and they exist because of a
+real silence: the binary found the packs through a path relative to the working
+directory, so launching it from anywhere but the repository root loaded nothing
+and reported nothing. An untextured city looks like a material bug rather than a
+missing file, and the two have completely different fixes. `NativeEngine` now
+owns the directory, forwards it to the Vulkan backend when the backend is
+created, takes `--assets DIR`, and prints the resolved path. One ctest asserts
+the default, one asserts the override, and the control — making the setter a
+no-op — fails the second and only the second.
+
+### Three defects found while building this
+
+| Defect | Symptom it would have had |
+|---|---|
+| zstd written without `ZSTD_c_checksumFlag` | corruption anywhere inside the compressed frame was silently accepted and decoded as plausible garbage — the worst failure shape there is, because it looks like data |
+| The KVD's key assumed to start at byte 8 | WebGL-oriented habit; KTX2 has one length per entry, so the key is at byte 4. Caught by the test, not by eye |
+| `metallic: -1` treated as a value | the "read metalness from the texture" sentinel became a uniform roughness of -1, i.e. a surface with no reflection at all |
+
+A fourth was found before any of this: `pavement`, `terrain` and `wall_render`
+are named by the scene builder and the geometry kit but are **not** among the 26
+baked materials, and `MaterialTable::index` aborts the process on an unknown id.
+Building a city with the real table would have crashed on the first frame. The
+ids now name real baked materials, and `emergent_scene_mesh` asserts that every
+id the scene and the kit name exists in the generated table — confirmed to bite
+by renaming a kit id, which exits 134 with "material: unknown id".
+
+### FINAL HARDWARE VALIDATION REQUIRED
+
+None of the following has ever executed, and the first one is the one to check
+first:
+
+- **Whether KTX-Software accepts these files.** The writer was implemented from
+  the KTX2 specification, not against a reference encoder, and no KTX tooling
+  exists in this environment. Every *texel* is proven correct, and the
+  supercompression is proven correct, because the reader is the only thing that
+  ever has to read them — but the container has never been opened by `libktx`,
+  `toktx` or any third-party tool. The descriptor is the part most likely to be
+  subtly wrong. The check is one command on a machine with the SDK:
+  `toktx --validate build/native-assets/albedo.ktx2`.
+- **The upload itself** — `createSceneMaterialMaps` staging, the three array
+  images, the view format, the sampler anisotropy, the transition from
+  "neutral fill" to "real material". `RenderFrameStats::materialMapsLoaded` and
+  `materialMapNote` are now printed on the render-target line, so a missing pack
+  says so instead of looking like a material bug.
+- **Whether the materials look right on a surface.** The reader proves the bytes
+  arrive; nothing here proves a brick wall is tiled at a believable scale. Tile
+  scale is authored, and authored means wrong somewhere.
+- **Whether a normal map lights correctly.** The bake validated that blue
+  dominates the normal maps, which catches an OpenGL/DirectX convention swap.
+  It cannot show a tangent frame built from a planar projection.
+
+### Note on the format choice
+
+The packs are zstd-supercompressed **RGBA8**, not BCn or ASTC. That is
+deliberate: zstd is a compression layer over an uncompressed payload, so every
+texel stays byte-recoverable and therefore verifiable in CI. A BC6H pack could
+not be decoded or checked by anything in this environment, so a GPU-compressed
+build would have been 50 MB of unverifiable bytes. Swapping in `toktx` later is
+a change to the packer's last step; the reader already dispatches on the DFD and
+the supercompression scheme.
+
+The cost of that choice, measured: **47.5 MB on disk, 416 MB of VRAM** for the
+three arrays with complete mip chains. zstd shrinks the download and leaves
+VRAM untouched, because decompression happens on the CPU and the GPU still
+receives RGBA8. A BCn build is the single largest remaining win available on
+hardware that has `toktx`, and it is worth roughly an order of magnitude on
+both numbers. Until then, 416 MB of texture for a 420 m city slice is a
+deliberate over-provision: the layer count is fixed at 26 and the resolution at
+512 px, and both are authored rather than discovered.
 
 **Slang.** A shading-language compiler. The two compute shaders in
 `native/shaders/` are GLSL, compiled by the driver at load time; there is no

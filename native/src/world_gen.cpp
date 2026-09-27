@@ -420,4 +420,71 @@ World generateWorld(int32_t seed) {
     return w;
 }
 
+namespace {
+
+/** Densest cell of a grid, returned rather than accumulated into a caller. */
+struct CellHit {
+    double x = 0;
+    double z = 0;
+    int32_t count = 0;
+    bool found = false;
+};
+
+CellHit densestCell(const std::vector<Building> &buildings, double originX, double originZ,
+                    double cell, double halfExtent) {
+    CellHit hit;
+    const int32_t n = std::max(1, static_cast<int32_t>(2.0 * halfExtent / cell));
+    std::vector<int32_t> counts(static_cast<size_t>(n) * static_cast<size_t>(n), 0);
+    for (const Building &b : buildings) {
+        const int32_t i = static_cast<int32_t>((b.x - originX + halfExtent) / cell);
+        const int32_t j = static_cast<int32_t>((b.z - originZ + halfExtent) / cell);
+        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+        ++counts[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)];
+    }
+    int32_t bi = 0, bj = 0, best = -1;
+    for (int32_t j = 0; j < n; ++j) {
+        for (int32_t i = 0; i < n; ++i) {
+            const int32_t c =
+                counts[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)];
+            if (c > best) {
+                best = c;
+                bi = i;
+                bj = j;
+            }
+        }
+    }
+    if (best <= 0) return hit;
+    hit.found = true;
+    hit.count = best;
+    hit.x = originX - halfExtent + (static_cast<double>(bi) + 0.5) * cell;
+    hit.z = originZ - halfExtent + (static_cast<double>(bj) + 0.5) * cell;
+    return hit;
+}
+
+}  // namespace
+
+WorldCentre worldCentre(const World &world, double searchRadius) {
+    WorldCentre out;
+    if (world.buildings.empty()) return out;
+
+    // Two passes: a coarse grid to find the right neighbourhood, then a finer
+    // one centred on that result. One pass either quantises the answer visibly
+    // or needs a grid fine enough to be slow over a multi-kilometre world.
+    constexpr double kCoarse = 128.0;
+    const CellHit coarse = densestCell(world.buildings, 0.0, 0.0, kCoarse, searchRadius);
+    if (!coarse.found) return out;
+
+    constexpr double kFine = 16.0;
+    const CellHit fine = densestCell(world.buildings, coarse.x, coarse.z, kFine, kCoarse);
+    const double cell = fine.found ? kFine : kCoarse;
+    const int32_t count = fine.found ? fine.count : coarse.count;
+
+    out.x = fine.found ? fine.x : coarse.x;
+    out.z = fine.found ? fine.z : coarse.z;
+    // Buildings per 10000 square metres, which is the unit a district density
+    // is normally quoted in.
+    out.density = (static_cast<double>(count) / (cell * cell)) * 10000.0;
+    return out;
+}
+
 }  // namespace emergent

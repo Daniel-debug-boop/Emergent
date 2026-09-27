@@ -179,4 +179,32 @@ const Road *nearestRoad(const World &world, double x, double z);
 /** The district containing a point, or nullptr. */
 const District *districtAt(const World &world, double x, double z);
 
+/** A point in the middle of the built-up area, and how dense it is. */
+struct WorldCentre {
+    double x = 0;
+    double z = 0;
+    /** Buildings per 10000 square metres, at that point. */
+    double density = 0;
+};
+
+/**
+ * Find the middle of the city.
+ *
+ * The generated world is not centred on the origin. It is laid out across a
+ * large area and the built-up part lands wherever the region noise put it, so
+ * for a typical seed the nearest building to (0,0) is several hundred metres
+ * away and a slice built at the origin is empty ground.
+ *
+ * That matters for more than a test's convenience: a streamer that centres on
+ * the origin streams nothing, a spawn point at the origin is in a field, and a
+ * minimap drawn from the origin shows a blank. So the centre is computed from
+ * the geometry rather than assumed.
+ *
+ * The search is over a coarse grid rather than a gradient walk, because a
+ * centroid is the wrong answer: the mean of a city's building positions is
+ * pulled toward whichever district happens to be largest, which is regularly
+ * the industrial one on the edge. The densest cell is downtown by construction.
+ */
+WorldCentre worldCentre(const World &world, double searchRadius = 4096.0);
+
 }  // namespace emergent

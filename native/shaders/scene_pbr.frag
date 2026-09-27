@@ -22,16 +22,9 @@ layout(location = 6) in float vUseUv;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 view;
     vec3 cameraPosition;
     float time;
     float water;
-    vec4 materialA[EMERGENT_MAX_MATERIALS];
-    vec4 materialB[EMERGENT_MAX_MATERIALS];
-    int materialCount;
-    int pad0;
-    int pad1;
-    int pad2;
 } pc;
 
 // The three material arrays. Units 0, 1 and 2, bound once per frame — a unit
@@ -51,6 +44,18 @@ layout(set = 1, binding = 0) uniform SceneUniforms {
     float night;
     float materialsReady;
 } scene;
+
+// The material table. A uniform buffer rather than push constants: at 64
+// materials it is 2 KB, and the guaranteed minimum for maxPushConstantsSize is
+// 128 bytes. See the same block in scene_pbr.vert.
+layout(set = 1, binding = 1) uniform MaterialTable {
+    vec4 materialA[EMERGENT_MAX_MATERIALS];
+    vec4 materialB[EMERGENT_MAX_MATERIALS];
+    int materialCount;
+    int pad0;
+    int pad1;
+    int pad2;
+} materials;
 
 layout(location = 0) out vec4 outColour;
 
@@ -73,7 +78,7 @@ vec3 fresnel(float u, vec3 f0) {
 }
 
 void main() {
-    if (vMaterial < 0 || vMaterial >= pc.materialCount) {
+    if (vMaterial < 0 || vMaterial >= materials.materialCount) {
         // A material index the table does not cover would index out of bounds
         // on a uniform array, and Vulkan's behaviour for an out-of-bounds
         // dynamic index on a non-robust buffer access is undefined. Rejecting
@@ -82,8 +87,8 @@ void main() {
         return;
     }
 
-    vec4 A = pc.materialA[vMaterial];
-    vec4 B = pc.materialB[vMaterial];
+    vec4 A = materials.materialA[vMaterial];
+    vec4 B = materials.materialB[vMaterial];
 
     // Face the normal at the eye. Without this, a box corner built from two
     // opposing faces shades both of them identically and every solid reads flat.

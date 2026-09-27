@@ -44,3 +44,10 @@ assets/.cache/
 # *is* committed because the game imports it directly. If the model set is ever
 # loaded rather than imported, this line has to go.
 assets/models.gen.mjs
+
+# `npm run assets:textures`. The 26 baked CC0 materials as the native material
+# table, and the three packed KTX2 maps under build/. The source PNGs in
+# assets/textures are committed, exactly as for the models; this is the
+# generated half. The CMake build regenerates it when node is available, and
+# emergent_materials falls back to the untextured table when it is not.
+assets/materials.gen.hpp

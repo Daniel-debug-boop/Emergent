@@ -125,6 +125,42 @@ MaterialTable buildMaterialTable(const MaterialArrays &arrays,
                                  const std::vector<Material> &textureMaterials);
 
 /**
+ * The table the renderer starts with, before any bake is loaded.
+ *
+ * The honest fallback, not the asset: the solid set with real roughness and
+ * metalness, plus one texture layer per id the scene and the geometry kit name,
+ * so the shader's array indexing is always in range. Every textured material
+ * resolves to a layer holding a neutral placeholder, so a wall is correctly lit
+ * and correctly fogged but flat grey until the CC0 bake is uploaded over it.
+ *
+ * It exists so that loading the bake is a *replacement* rather than a
+ * precondition. A renderer that draws nothing until the asset pipeline is wired
+ * up is a renderer that looks broken, and the breakage is easy to mistake for a
+ * shader bug.
+ */
+MaterialTable defaultMaterialTable();
+
+/**
+ * The one table the whole process agrees on.
+ *
+ * A function-local static rather than a parameter, because the alternative is
+ * two tables: the renderer uploads one and the scene assembler names materials
+ * against the other, and nothing reports the mismatch until a wall is the wrong
+ * grey. `setSceneMaterials` replaces the contents, and the next slice is
+ * assembled against the replacement.
+ */
+MaterialTable &sharedMaterialTable();
+
+/**
+ * The table built from the packed CC0 bake, or the untextured fallback.
+ *
+ * Reads `materials.gen.hpp`, which `npm run assets:textures` generates from the
+ * bake descriptor. Returns the fallback when that header has not been built, so
+ * a clean checkout configures and compiles.
+ */
+MaterialTable buildBakedMaterialTable();
+
+/**
  * The vertex layout every renderer buffer uses.
  *
  *   position(3) normal(3) colour(3) material(1) uv(2) = 12 floats, 48 bytes.
