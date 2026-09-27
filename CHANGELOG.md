@@ -1,5 +1,79 @@
 # CHANGELOG
 
+## 2026-09-27 — the controls are data, not key checks
+
+Every control in EMERGENT was a hard-coded key comparison. `updatePlayer` read
+`keys['d']`, `keys['shift']` and `keys[' ']` out of a mutable object that one
+listener wrote, and a second listener compared `e.key.toLowerCase()` against the
+strings `'e'`, `'t'`, `'q'`, `'v'`, `'f2'`, `'f3'`, `'d'` and `'n'` to run the
+game's verbs. Mouse look was a literal in the `mousemove` listener, the gamepad
+was read by index at one call site, and the touch stick fed `touchMove` straight
+into the movement maths. Four devices, four separate code paths, and no way to
+change a binding without editing the source.
+
+`input.mjs` replaces all of it with one action layer. Fourteen actions —
+`forward`, `back`, `left`, `right`, `sprint`, `jump`, `interact`,
+`toggleRenderer`, `toggleQuality`, `toggleCamera`, `toggleTelemetry`, `save`,
+`load`, `newWorld` and `releasePointer` — are bound to physical key codes,
+standard-gamepad buttons and stick axes from a table. Keyboard, pad and touch
+all write into the same state, and the game reads only `moveAxes`, `isDown`,
+`wasPressed` and `addMouseDelta`. Rebinding is a data operation: `beginRebind`,
+`completeRebind`, `resetBindings` and `serialiseBindings` all work on the live
+state, and the binding table is reachable from the outside via
+`EMERGENT.input`.
+
+Three real defects fell out of doing it:
+
+- **Strafe right walked backwards.** `moveAxes` reports +y for "away from the
+  player", EMERGENT's heading convention puts walking forward along
+  `-[sin(yaw), cos(yaw)]`, and the two signs disagreed. Every W-key press in the
+  game would have moved the character the wrong way. The three existing movement
+  tests caught it; the sign is now resolved once, in `updatePlayer`.
+- **D opened the telemetry overlay while you strafed right.** EMERGENT's first
+  release bound both to `KeyD`. Holding D to strafe therefore opened the debug
+  HUD underneath the player. The overlay is `F1` now, and the E2E test asserts it
+  stays closed.
+- **The harness dispatched events a browser would not.** `tools/headless_runtime.mjs`
+  kept handing an event to every listener after one called
+  `stopImmediatePropagation`, and modelled `requestPointerLock()` as a no-op —
+  so the mouse look, the one control with no fallback binding, could not be
+  exercised at all. Both are now faithful.
+
+A key press is now edge-triggered. Holding `T` switches the renderer once
+instead of sixty times a second; the quality test had been relying on the old
+`keydown`-fires-every-time behaviour and now sends the release a real player does.
+
+Verification, all run on this machine:
+
+- `test_input.mjs` — **29 tests, 189 assertions** over the action layer alone:
+  defaults, edge detection, rebinding, collision-free bindings, serialisation
+  round-trips and readable labels.
+- `test_headless_game.mjs` — new end-to-end test,
+  *"the action-based input layer drives movement, look and interaction"*,
+  **41 checks**: W and S are opposite along the camera axis, A and D are opposite
+  along the strafe axis, D does not toggle telemetry, Shift sprints and releasing
+  it walks again, the mouse yaws and pitches only while the pointer is locked, the
+  heading the mouse produces is the heading the character walks, E advances an
+  interact mission stage, T toggles the renderer once per press and not while
+  held, and rebinding `forward` to `I` genuinely rewires the game — W stops
+  moving the character and `I` does. Every synthetic event carries `code`, as a
+  real browser sends, so a binding written against `key` could not pass by
+  accident. Suite total: **13/13 runtime tests, 167 assertions**.
+- `test_missions.mjs` — five new tests over the world-facing seam this change
+  also moved into the rules module (`jobAvailability`, `resolveStage`,
+  `createJob`): availability follows world state rather than the archetype
+  table, a stage resolves to a real named place, an unsupportable stage is
+  dropped rather than faked, a survey waypoint goes somewhere new, and a created
+  job is playable and deterministic. **445 assertions, 0 failing.**
+- `npm test` — world, math, culling, missions, physics, input, project, tooling
+  and runtime, all green. `test:input` is a new script and is wired into
+  `npm test` and CI; `input.mjs` is in the build manifest, and CI now asserts
+  `dist/input.mjs` exists.
+
+What this does not do: there is no controls screen in the UI yet. The layer,
+the rebind path and the serialisation are all shipped and reachable, so the
+screen is a rendering of state that already exists rather than a new system.
+
 ## 2026-09-26 — jobs you can actually take, and an economy with shortages in it
 
 There was one kind of job. It was a delivery, it was hard-coded across three

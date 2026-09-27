@@ -10,7 +10,7 @@
 import {
   ARCHETYPES, ARCHETYPE_IDS, STAGE_TYPES, buildMission, currentStage,
   timeRemaining, objectiveText, stageDistance, stageComplete, advanceMission,
-  missionProgress, pickArchetype
+  missionProgress, pickArchetype, jobAvailability, resolveStage, createJob
 } from './missions.mjs';
 
 let checks = 0;
@@ -248,6 +248,112 @@ test('archetype selection is deterministic for a given seed', () => {
   for (let i = 0; i < 20; i++) a.push(pickArchetype({ delivery: true, survey: true, restock: true, respond: true }, seeded(7)));
   for (let i = 0; i < 20; i++) b.push(pickArchetype({ delivery: true, survey: true, restock: true, respond: true }, seeded(7)));
   assertEqual(JSON.stringify(a), JSON.stringify(b), 'the same seed offers the same jobs');
+});
+
+// ---------------------------------------------------------------------------
+// The world-facing seam: what the world can support, and where a stage lands
+// ---------------------------------------------------------------------------
+
+/** A business in a business pool, with the fields resolveStage reads. */
+const biz = (id, x, z, stock, type = 'Depot') => ({ id, x, z, stock, type });
+/** A district in a district pool. */
+const dist = (x, z, type = 'Docks') => ({ x, z, type });
+/** A live incident in an incident pool. */
+const inc = (x, z) => ({ x, z });
+
+const POOLS = {
+  stocked: [biz(1, 100, 100, 40), biz(2, 300, 100, 22)],
+  short: [biz(3, 100, 400, 1), biz(4, 600, 200, 0)],
+  districts: [dist(50, 50), dist(900, 20), dist(30, 800)],
+  incidents: [inc(200, 700)],
+  awayFrom: { x: 0, z: 0 }
+};
+const pool = (over = {}) => ({ ...POOLS, ...over });
+
+test('availability follows what the world can actually complete', () => {
+  const full = jobAvailability(pool());
+  assertEqual(full.delivery, true, 'a delivery needs a surplus and a shortage');
+  assertEqual(full.restock, true, 'a restock needs a shortage');
+  assertEqual(full.survey, true, 'a survey needs somewhere to walk');
+  assertEqual(full.respond, true, 'a response needs a live incident');
+
+  const bare = jobAvailability(pool({ stocked: [], short: [], districts: [], incidents: [] }));
+  assertEqual(bare.delivery, false, 'no surplus means no delivery, however many jobs want one');
+  assertEqual(bare.restock, false, 'no shortage means no restock');
+  assertEqual(bare.survey, false, 'nowhere to walk means no survey');
+  assertEqual(bare.respond, false, 'no incident means no response');
+
+  // A shortage alone supports a restock but not a delivery: this is the pairing
+  // that silently deletes half the archetypes if availability is derived from
+  // the archetype table instead of from world state.
+  const oneSided = jobAvailability(pool({ stocked: [] }));
+  assertEqual(oneSided.delivery, false, 'a delivery needs both ends of the trade');
+  assertEqual(oneSided.restock, true, 'a restock only needs the short end');
+});
+
+test('a stage resolves to a real place, and names what it is', () => {
+  const source = resolveStage({ role: 'source', label: 'Collect from' }, 'delivery', pool(), seeded(1));
+  assert(source, 'a source stage with a stocked business resolves');
+  assert(POOLS.stocked.some(b => b.id === source.businessId), 'and it is one of the stocked businesses');
+  assertEqual(source.stock, POOLS.stocked.find(b => b.id === source.businessId).stock, 'it carries the stock it is collecting');
+  assert(source.label.startsWith('Collect from'), 'the label keeps the archetype wording');
+
+  const target = resolveStage({ role: 'target', label: 'Deliver to' }, 'delivery', pool(), seeded(1));
+  assert(POOLS.short.some(b => b.id === target.businessId), 'a target resolves to a short business');
+  assert(target.businessId !== source.businessId, 'and never to the one it just left');
+
+  const event = resolveStage({ role: 'event', label: 'Respond' }, 'respond', pool(), seeded(3));
+  assertEqual(event.x, 200, 'an event stage lands on the incident');
+  assertEqual(event.z, 700, 'at the incident position');
+});
+
+test('a stage that the world cannot support is dropped, not faked', () => {
+  // Returning null is what makes a job degrade into a shorter one. Returning a
+  // made-up position instead would send the player somewhere that does not
+  // exist, which is the failure this guards.
+  assertEqual(resolveStage({ role: 'source', label: 'Collect' }, 'delivery', pool({ stocked: [] }), seeded(1)), null,
+    'a source with no stocked business drops');
+  assertEqual(resolveStage({ role: 'target', label: 'Deliver' }, 'delivery', pool({ short: [] }), seeded(1)), null,
+    'a target with no short business drops');
+  assertEqual(resolveStage({ role: 'event', label: 'Respond' }, 'respond', pool({ incidents: [] }), seeded(1)), null,
+    'an event with no incident drops');
+  assertEqual(resolveStage({ role: 'waypoint', label: 'Survey' }, 'survey', pool({ districts: [] }), seeded(1)), null,
+    'a waypoint with no district drops');
+  assertEqual(resolveStage({ role: 'source', label: 'Collect' }, 'delivery', pool({ stocked: [{ id: 9, x: NaN, z: 0, stock: 1 }] }), seeded(1)), null,
+    'a business with no position drops rather than becoming NaN coordinates');
+  assertEqual(resolveStage({ role: 'unknown', label: 'x' }, 'delivery', pool(), seeded(1)), null,
+    'an unrecognised role drops instead of silently resolving to nothing');
+});
+
+test('a survey waypoint goes somewhere, not where the player already is', () => {
+  const from = resolveStage({ role: 'waypoint', label: 'Survey' }, 'survey',
+    pool({ awayFrom: dist(900, 20) }), seeded(5));
+  assert(from, 'a waypoint resolves when there is somewhere to go');
+  assert(Math.hypot(from.x - 900, from.z - 20) > 1,
+    `and it is not the player's current position (${from.x}, ${from.z})`);
+  // The player standing on a district: every sample is at distance zero, which
+  // must degrade to "drop the stage" rather than a waypoint with no travel in it.
+  assertEqual(resolveStage({ role: 'waypoint', label: 'Survey' }, 'survey',
+    pool({ districts: [dist(900, 20)], awayFrom: dist(900, 20) }), seeded(5)), null,
+    'a single district that is also where the player stands drops the stage');
+});
+
+test('a created job is playable from end to end', () => {
+  const job = createJob({ pool: pool(), rand: seeded(11), rank: 3 });
+  assert(job, 'a supported world yields a job');
+  assertEqual(job.stageIndex, 0, 'it starts at the first stage');
+  assert(job.stages.length > 0, 'with at least one stage');
+  assert(job.reward > 0, 'and it pays');
+  for (const s of job.stages) {
+    assert(Number.isFinite(s.x) && Number.isFinite(s.z), `stage ${s.id} has a real position`);
+    assert(s.label && s.label.length, `stage ${s.id} is labelled`);
+  }
+  assertEqual(createJob({ pool: pool(), rand: seeded(11), rank: 3 }).stages.map(s => s.id).join(),
+    job.stages.map(s => s.id).join(), 'the same seed builds the same job');
+  // A world that supports nothing yields nothing, rather than a job the player
+  // cannot finish.
+  const barren = pool({ stocked: [], short: [], districts: [], incidents: [] });
+  assertEqual(createJob({ pool: barren, rand: seeded(2) }), null, 'an empty world offers no job');
 });
 
 process.stdout.write(`\n${checks} assertions, ${failures} failing test(s)\n`);
