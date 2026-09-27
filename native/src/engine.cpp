@@ -82,6 +82,10 @@ bool NativeEngine::buildWorld(int32_t seed) {
  */
 void NativeEngine::updateScene(const FrameState &state) {
     if (world_.buildings.empty()) return;
+    if (!sceneBuilder_.complete()) {
+        stepSceneBuild();
+        return;
+    }
     const double cx = state.playerPosition[0];
     const double cz = state.playerPosition[2];
     // A quarter of the radius, so the slice is comfortably rebuilt before the
@@ -98,9 +102,32 @@ void NativeEngine::updateScene(const FrameState &state) {
     options.centerZ = cz;
     options.radius = streamRadius_;
     options.detailLevel = detailLevel_;
-    sceneMesh_ = buildSceneMesh(world_, sharedMaterialTable(), options);
-    sceneStats_ = sceneMesh_.stats;
 
+    // Start a build rather than running one. A slice is ~210k triangles and
+    // ~35 ms of assembly, which is a dropped frame at a chunk boundary and has
+    // been since the streamer was first wired up. The builder emits the same
+    // buildings in the same order across several frames, so the mesh is
+    // byte-identical to the one-shot build; only the timing changes.
+    {
+        const profile::Scope plan("scene.plan");
+        sceneBuilder_.begin(world_, sharedMaterialTable(), options);
+    }
+    // Keep the previous mesh on screen until the new one is ready, rather than
+    // swapping to an empty vertex buffer and rendering nothing.
+    stepSceneBuild();
+}
+
+void NativeEngine::stepSceneBuild() {
+    if (sceneBuilder_.complete()) return;
+    const profile::Scope build("scene.build");
+    const bool done = sceneBuilder_.step(sceneTriangleBudget_);
+    if (!done) return;
+    sceneMesh_ = sceneBuilder_.mesh();
+    sceneStats_ = sceneMesh_.stats;
+    // Kept after reset(), so the engine can report how the build was spread.
+    sceneBuildFrames_ = sceneBuilder_.stepCount();
+    sceneLargestStep_ = sceneBuilder_.largestStep();
+    sceneBuilder_.reset();
     if (auto *vk = dynamic_cast<VulkanRenderBackend *>(renderer_)) {
         std::string error;
         if (!vk->setSceneMesh(sceneMesh_) && !error.empty()) {

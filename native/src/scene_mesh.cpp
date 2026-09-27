@@ -219,27 +219,55 @@ void emitBuilding(MeshBuilder &b, const Building &bd, const SceneBuildOptions &o
     }
 }
 
-}  // namespace
 
-void SceneMesh::readVertex(uint32_t index, float out[kFloatsPerVertex]) const {
-    const size_t base = static_cast<size_t>(index) * kFloatsPerVertex;
-    for (int i = 0; i < kFloatsPerVertex; ++i) out[i] = vertices[base + static_cast<size_t>(i)];
+/**
+ * Everything one scene build needs, so a build can be paused and resumed.
+ *
+ * Shared by the one-shot and the amortized paths on purpose. If the two drove
+ * separate copies of the geometry code they would agree today and drift
+ * tomorrow, and the test asserting they are byte-identical would then be
+ * asserting that a bug reproduces itself.
+ */
+struct BuildState {
+    BuildState(const World &w, const MaterialTable &m, const SceneBuildOptions &opt)
+        : world(w), materials(m), o(opt), b(m) {}
+    const World &world;
+    const MaterialTable &materials;
+    SceneBuildOptions o;
+    std::unique_ptr<GeometryKit> kit;
+    std::unique_ptr<Resolver> res;
+    MeshBuilder b;
+    SceneMesh mesh;
+
+    /** Buildings inside the slice, nearest first. */
+    struct Candidate {
+        const Building *bd;
+        double distanceSq;
+    };
+    std::vector<Candidate> candidates;
+    size_t cursor = 0;
+
+    /** Shared by the ground and the roads, so they read as one surface. */
+    float groundCol[3] = {0.34f, 0.33f, 0.29f};
+    int32_t terrainMat = 0;
+};
+
+static uint32_t trianglesSoFar(const BuildState &st) {
+    return static_cast<uint32_t>(st.b.size() / kFloatsPerVertex / 3);
 }
 
-SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
-                         const SceneBuildOptions &options) {
-    SceneMesh mesh;
-    SceneBuildOptions o = options;
-    // A detail parameter with no ceiling is a detail parameter with no budget.
-    o.detailLevel = std::max(0, std::min(2, o.detailLevel));
-    if (!(o.radius > 0.0)) o.radius = 1.0;
+static void emitGround(BuildState &st) {
+    const float (&groundCol)[3] = st.groundCol;
+    const int32_t terrainMat = st.terrainMat;
 
-    GeometryKit kit(materials);
-    Resolver res(materials, kit);
-    MeshBuilder b(materials);
-
-    const float groundCol[3] = {0.34f, 0.33f, 0.29f};
-    const int32_t terrainMat = res.get("terrain_grass");
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] MeshBuilder &b = st.b;
+    [[maybe_unused]] Resolver &res = *st.res;
+    [[maybe_unused]] const GeometryKit &kit = *st.kit;
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
 
     // -- ground -------------------------------------------------------------
     if (o.includeGround) {
@@ -287,6 +315,17 @@ SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
         mesh.stats.groundQuads = quads;
     }
 
+}
+static void emitRoads(BuildState &st) {
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] MeshBuilder &b = st.b;
+    [[maybe_unused]] Resolver &res = *st.res;
+    [[maybe_unused]] const GeometryKit &kit = *st.kit;
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
+
     // -- roads --------------------------------------------------------------
     // Clipped to the slice box. A road is at most a few tens of metres across
     // so clipping it is nearly a no-op, but doing it uniformly means the slice
@@ -319,6 +358,17 @@ SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
         }
     }
 
+}
+static void emitWater(BuildState &st) {
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] MeshBuilder &b = st.b;
+    [[maybe_unused]] Resolver &res = *st.res;
+    [[maybe_unused]] const GeometryKit &kit = *st.kit;
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
+
     // -- water --------------------------------------------------------------
     // A river is a single polygon kilometres across. Emitted whole, one of them
     // makes the slice's bounding box kilometres wide, which culls nothing,
@@ -336,59 +386,89 @@ SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
                 res.get("glass"));
     }
 
-    // -- buildings ----------------------------------------------------------
-    // Collected and sorted by distance first, so the triangle budget drops the
-    // *farthest* buildings rather than whichever ones happened to come last in
-    // the world list. Dropping in iteration order is how a streaming slice ends
-    // up with a hole in the middle of it.
-    struct Candidate {
-        const Building *bd;
-        double distanceSq;
-    };
-    std::vector<Candidate> candidates;
+}
+static void planBuildings(BuildState &st) {
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
+    std::vector<BuildState::Candidate> &candidates = st.candidates;
+    candidates.clear();
     candidates.reserve(world.buildings.size());
-    for (const Building &bd : world.buildings) {
-        const double dx = bd.x - o.centerX;
-        const double dz = bd.z - o.centerZ;
-        const double d2 = dx * dx + dz * dz;
-        // The pad is the building's half-diagonal, which is the exact radius
-        // within which at least one corner of its footprint is inside the
-        // slice. Using half the width *plus* half the depth instead is looser
-        // than the geometry allows, and the looseness compounds: a building
-        // admitted that far outside the circle then overhangs the slice's
-        // bounds, which is how a streaming radius quietly stops bounding
-        // anything.
-        const double reach = o.radius + 0.5 * std::hypot(bd.w, bd.d);
-        if (d2 > reach * reach) {
-            ++mesh.stats.buildingsOutsideRadius;
-            continue;
-        }
-        candidates.push_back({&bd, d2});
-    }
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate &lhs, const Candidate &rhs) { return lhs.distanceSq < rhs.distanceSq; });
 
-    // The budget is measured in triangles actually emitted, read back from the
-    // builder, because anything cheaper is a count of the wrong thing: an
-    // earlier version incremented a counter once per building and compared it
-    // against a triangle ceiling, so the budget never once fired and the test
-    // that was supposed to prove it worked proved nothing.
-    auto trianglesSoFar = [&]() {
-        return static_cast<uint32_t>(b.size() / kFloatsPerVertex / 3);
-    };
-    for (const Candidate &c : candidates) {
-        const Building &bd = *c.bd;
-        if (o.maxTriangles > 0 && trianglesSoFar() > o.maxTriangles) {
+        // -- buildings ----------------------------------------------------------
+        // Collected and sorted by distance first, so the triangle budget drops the
+        // *farthest* buildings rather than whichever ones happened to come last in
+        // the world list. Dropping in iteration order is how a streaming slice ends
+        // up with a hole in the middle of it.
+        for (const Building &bd : world.buildings) {
+            const double dx = bd.x - o.centerX;
+            const double dz = bd.z - o.centerZ;
+            const double d2 = dx * dx + dz * dz;
+            // The pad is the building's half-diagonal, which is the exact radius
+            // within which at least one corner of its footprint is inside the
+            // slice. Using half the width *plus* half the depth instead is looser
+            // than the geometry allows, and the looseness compounds: a building
+            // admitted that far outside the circle then overhangs the slice's
+            // bounds, which is how a streaming radius quietly stops bounding
+            // anything.
+            const double reach = o.radius + 0.5 * std::hypot(bd.w, bd.d);
+            if (d2 > reach * reach) {
+                ++mesh.stats.buildingsOutsideRadius;
+                continue;
+            }
+            candidates.push_back({&bd, d2});
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const BuildState::Candidate &lhs, const BuildState::Candidate &rhs) {
+                      return lhs.distanceSq < rhs.distanceSq;
+                  });
+
+        // The budget is measured in triangles actually emitted, read back from the
+        // builder, because anything cheaper is a count of the wrong thing: an
+        // earlier version incremented a counter once per building and compared it
+        // against a triangle ceiling, so the budget never once fired and the test
+        // that was supposed to prove it worked proved nothing.
+}
+static void emitBuildingsRange(BuildState &st, size_t from, size_t to) {
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] Resolver &res = *st.res;
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
+
+    // A range, not the whole list: this is the function a frame budget calls once
+    // per step, and being interruptible is the entire point of it. The budget is
+    // read from the builder rather than counted, because a counter is a count of
+    // the wrong thing -- an earlier version incremented once per building and
+    // compared it against a triangle ceiling, so it never once fired and the test
+    // meant to prove it worked proved nothing.
+    const size_t end = std::min(to, st.candidates.size());
+    for (size_t i = from; i < end; ++i) {
+        const Building &bd = *st.candidates[i].bd;
+        if (o.maxTriangles > 0 && trianglesSoFar(st) > o.maxTriangles) {
             ++mesh.stats.buildingsDroppedForBudget;
             mesh.stats.budgetLimited = true;
             continue;
         }
-        const size_t before = b.size();
-        emitBuilding(b, bd, o, res, world.seed);
-        if (b.size() == before) continue;  // nothing emitted; do not count it
+        const size_t before = st.b.size();
+        emitBuilding(st.b, bd, o, res, world.seed);
+        if (st.b.size() == before) continue;  // nothing emitted; do not count it
         ++mesh.stats.buildings;
     }
+}
 
+static void emitProps(BuildState &st) {
+    // [[maybe_unused]] throughout: each phase touches a subset of the state, and
+    // a -Wunused warning per alias would bury the real ones.
+    [[maybe_unused]] MeshBuilder &b = st.b;
+    [[maybe_unused]] Resolver &res = *st.res;
+    [[maybe_unused]] const GeometryKit &kit = *st.kit;
+    [[maybe_unused]] SceneBuildOptions &o = st.o;
+    [[maybe_unused]] SceneMesh &mesh = st.mesh;
+    [[maybe_unused]] const World &world = st.world;
 
     // -- props --------------------------------------------------------------
     if (o.includeProps) {
@@ -423,15 +503,131 @@ SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
         }
     }
 
-    // Read the bounds before the move, so the ordering of this function reads
-    // the way it executes.
-    if (b.hasBounds()) {
-        b.bounds(mesh.boundsMin, mesh.boundsMax);
+}
+
+/** Bounds and counts, read off the builder once the last step has run. */
+static void finishScene(BuildState &st) {
+    // Read the bounds before the move, so the ordering here reads the way it
+    // executes.
+    if (st.b.hasBounds()) {
+        st.b.bounds(st.mesh.boundsMin, st.mesh.boundsMax);
     }
-    mesh.stats.vertices = static_cast<uint32_t>(b.size() / kFloatsPerVertex);
-    mesh.stats.triangles = mesh.stats.vertices / 3;
-    mesh.vertices = std::move(b.data());
-    return mesh;
+    st.mesh.stats.vertices = static_cast<uint32_t>(st.b.size() / kFloatsPerVertex);
+    st.mesh.stats.triangles = st.mesh.stats.vertices / 3;
+    st.mesh.vertices = std::move(st.b.data());
+}
+
+static std::unique_ptr<BuildState> makeState(const World &world, const MaterialTable &materials,
+                                             const SceneBuildOptions &options) {
+    auto st = std::make_unique<BuildState>(world, materials, options);
+    st->kit = std::make_unique<GeometryKit>(materials);
+    st->res = std::make_unique<Resolver>(materials, *st->kit);
+    st->terrainMat = st->res->get("terrain_grass");
+    // A detail parameter with no ceiling is a detail parameter with no budget.
+    st->o.detailLevel = std::max(0, std::min(2, st->o.detailLevel));
+    if (!(st->o.radius > 0.0)) st->o.radius = 1.0;
+    return st;
+}
+
+}  // namespace
+
+void SceneMesh::readVertex(uint32_t index, float out[kFloatsPerVertex]) const {
+    const size_t base = static_cast<size_t>(index) * kFloatsPerVertex;
+    for (int i = 0; i < kFloatsPerVertex; ++i) out[i] = vertices[base + static_cast<size_t>(i)];
+}
+
+SceneMesh buildSceneMesh(const World &world, const MaterialTable &materials,
+                         const SceneBuildOptions &options) {
+    auto st = makeState(world, materials, options);
+    emitGround(*st);
+    emitRoads(*st);
+    emitWater(*st);
+    planBuildings(*st);
+    emitBuildingsRange(*st, 0, st->candidates.size());
+    emitProps(*st);
+    finishScene(*st);
+    return std::move(st->mesh);
+}
+
+struct SceneBuilder::Impl {
+    std::unique_ptr<BuildState> st;
+    enum class Phase { kNew, kStatic, kBuildings, kProps, kDone } phase = Phase::kNew;
+
+    /** Triangles emitted by the last advance(), measured before the move. */
+    uint32_t emitted = 0;
+
+    void advance(uint32_t budget) {
+        const uint32_t entry = trianglesSoFar(*st);
+        switch (phase) {
+            case Phase::kNew:
+                emitGround(*st);
+                emitRoads(*st);
+                emitWater(*st);
+                planBuildings(*st);
+                emitted = trianglesSoFar(*st) - entry;
+                phase = Phase::kStatic;
+                break;
+            case Phase::kStatic:
+            case Phase::kBuildings: {
+                // Stop as soon as the budget is spent, so a step never runs long
+                // merely because it started near the end of the list. One
+                // building is emitted whole or not at all, so the overshoot is
+                // at most the building in flight and never more.
+                const uint32_t start = trianglesSoFar(*st);
+                while (st->cursor < st->candidates.size()) {
+                    emitBuildingsRange(*st, st->cursor, st->cursor + 1);
+                    ++st->cursor;
+                    if (trianglesSoFar(*st) - start >= budget) break;
+                }
+                emitted = trianglesSoFar(*st) - entry;
+                if (st->cursor >= st->candidates.size()) phase = Phase::kProps;
+                break;
+            }
+            case Phase::kProps:
+                emitProps(*st);
+                // Measured here, not in step(): finishScene moves the buffer out
+                // and step() would subtract from an empty one and underflow.
+                emitted = trianglesSoFar(*st) - entry;
+                finishScene(*st);
+                phase = Phase::kDone;
+                break;
+            case Phase::kDone:
+                break;
+        }
+    }
+};
+
+void SceneBuilder::begin(const World &world, const MaterialTable &materials,
+                         const SceneBuildOptions &options) {
+    impl_ = std::make_shared<Impl>();
+    impl_->st = makeState(world, materials, options);
+    impl_->phase = Impl::Phase::kNew;
+    mesh_ = SceneMesh{};
+    complete_ = false;
+    steps_ = 0;
+    largestStep_ = 0;
+}
+
+bool SceneBuilder::step(uint32_t triangleBudget) {
+    if (complete_ || !impl_) return complete_;
+    // A budget of zero still emits one building, which is the only way to make
+    // progress. Read it as "one building" rather than spinning forever.
+    impl_->advance(triangleBudget == 0 ? 1u : triangleBudget);
+    largestStep_ = std::max(largestStep_, impl_->emitted);
+    ++steps_;
+    if (impl_->phase == Impl::Phase::kDone) {
+        mesh_ = std::move(impl_->st->mesh);
+        complete_ = true;
+    }
+    return complete_;
+}
+
+void SceneBuilder::reset() {
+    impl_.reset();
+    mesh_ = SceneMesh{};
+    complete_ = true;
+    steps_ = 0;
+    largestStep_ = 0;
 }
 
 }  // namespace emergent

@@ -252,6 +252,11 @@ int main(int argc, char **argv) {
                     st.buildings, st.roads, st.props, st.trees, st.groundQuads);
         std::printf("Scene mesh: %u vertices, %u triangles, %u dropped for budget\n", st.vertices,
                     st.triangles, st.buildingsDroppedForBudget);
+        // The same mesh, assembled over several frames instead of one 35 ms
+        // stall. Printed so the improvement is checkable in CI rather than
+        // something to take on trust.
+        std::printf("Scene build: %u frames, heaviest step %u triangles\n",
+                    engine.sceneBuildFrames(), engine.sceneLargestStep());
     }
     if (frames > 0 || realtime > 0.0) {
         const auto &st = engine.frameStats();

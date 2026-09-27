@@ -575,6 +575,107 @@ generated SPIR-V against. Not attempted.
 system. EMERGENT's renderer is raw Vulkan + Volk + VMA; adding The Forge would
 replace the renderer rather than extend it.
 
+## 2026-09-27 — the clean checkout could not run the game
+
+Found by pushing the work above and reading what CI did with it. None of it is
+native; it is all the web build, and it is the part of the repository that gets
+shipped.
+
+### What was actually broken
+
+A fresh clone could not start the game. `interiors.mjs` imports
+`assets/models.gen.mjs`, a 28 MB generated artefact that is deliberately not in
+git, so the module graph had an unresolvable edge. `test_models.mjs` imported it
+too, which is how CI found this: that suite had only ever passed on a machine
+that had run the bake.
+
+Worse, `tools/build.mjs` reported **success**. Three faults, all the same shape
+-- something claimed to handle the case and did not:
+
+| Fault | Why it was invisible |
+|---|---|
+| `ASSET_FILES` was declared, with a comment explaining that a missing entry is a 404, and **nothing ever read the array** | The build shipped a dist whose `interiors.mjs` could not resolve its own import |
+| The hand-written list of "every module the page imports" had rotted | It named `gltf.mjs`, `lod.mjs` and `interiors.mjs`, none of which anything reaches from `index.html`, and 28 MB of payload rode along with them |
+| A failed build did `rm -rf dist` before copying | Any error partway through destroyed a working artifact and left a half-written one where a deploy would find it |
+
+The comments were the worst of it. A comment describing a check that does not
+exist is worse than no comment, because it tells the next reader the case is
+handled.
+
+### What replaced it
+
+**The file list is now derived, not declared.** `walkModuleGraph()` starts at
+`index.html` and follows `src=`, `import=`, static imports, re-exports, side-
+effect imports and `import(...)`, resolving relative specifiers and refusing
+bare ones the import map does not cover. A module the page needs and does not
+have fails the build by name. A module nothing needs is not shipped.
+
+That took the dist from 96 files to 14 and 102 MB to 75 MB, and it makes the
+class of bug impossible rather than absent.
+
+Three things about the walker were wrong before they were right, and each was
+caught by the number it printed rather than by reading the code:
+
+- Requiring a `./` prefix on the document's own `src` found **one** file and
+  shipped a dist with no game in it, while still reporting success.
+- Matching imports without stripping comments matched the prose
+  `nothing distinguishes "converged" from "pinned"` -- the word `from` followed
+  by a quoted string is exactly the shape of an import statement.
+- Checking the import map's *values* instead of its *keys* turned
+  `@dimforge/rapier3d-compat` into an unsatisfiable bare specifier.
+
+And a `catch` around the file read reported a typo in the walker itself as a
+missing `index.html`, sending the reader to the repository instead of the build
+script. It now only translates `ENOENT`.
+
+**`assets/models.index.mjs`** holds the format -- room enum, vertex stride, LOD
+decode -- in a file small enough to commit, and the payload is injected into it
+by `setModelSet()`, which validates the stride and the room names rather than
+trusting them. That is the data *shape*, not the content, and a consumer needs
+all three whether or not a model has loaded. With nothing injected, `MODELS` is
+empty and a building gets a shell and no furniture: a visibly emptier room, not
+a crash and not a wrong one.
+
+**`test_models.mjs`** no longer imports the payload. Its importer, simplifier,
+LOD and interior checks run everywhere; the thirteen bake checks announce
+themselves as skipped -- by name, and in a count -- rather than passing quietly.
+
+**The build stages and swaps.** It writes `.dist-staging/`, renames the old
+`dist` aside, renames the new one in, and only then removes the old. A failed
+build cannot destroy what worked.
+
+### Verified here
+
+- `test_tooling.mjs` **11 checks** (was 7), including four new ones that assert
+  the artifact against itself: the dist is self-contained, nothing unreachable
+  ships, the payload stays out, and a missing module fails the build *without*
+  taking the previous dist with it.
+- The graph walk in the test is a **second implementation**. Importing the
+  build's would make a bug in the walker invisible to the one check that exists
+  to find it.
+- A clean clone: `npm install`, `npm test` and `npm run build` all pass with no
+  generated model payload present.
+- `ctest` **17/17**, and **10/10** in the Tracy configuration.
+
+### And the CI bug that was hiding three of them
+
+The native job builds test targets from a named list. The atmosphere, ktx2 and
+scene_mesh executables were not on it, and ctest scores a test whose executable
+was never built as **"Not Run"** -- which reads like a pass in a summary line and
+is nothing of the kind. The workflow's own comment records this trap biting an
+earlier job. It builds `all` now.
+
+Underneath were two more of the same shape: `emergent_ktx2_test` linked only
+`emergent_ktx2`, so nothing pulled in the packer and its real-pack checks
+skipped; and the packer's custom command declared only the generated header as
+its output, so the 50 MB of KTX2 it also produces were untracked side effects.
+Deleting them left the build reporting itself up to date. A build system cannot
+track what it is not told about. The three packs are declared outputs now.
+
+Verified by deleting the packs: the build repacks them, the test finds them, and
+reports zero skips.
+
+
 ## Keeping this honest
 
 `.github/workflows/native.yml` clones the same pinned revisions, configures,

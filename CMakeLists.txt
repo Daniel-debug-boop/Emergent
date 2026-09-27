@@ -668,7 +668,20 @@ add_test(NAME emergent_native_frame_loop_realtime COMMAND emergent_native --real
 # and that it produces a city, which is the part that can be checked without a
 # GPU. The pixels are not checked here and cannot be — see
 # docs/ENGINE_VERIFICATION.md.
-add_test(NAME emergent_native_scene_stream COMMAND emergent_native --scene 7 --frames 5)
+# Enough frames for the amortized build to finish. It needs 14 at the default
+# budget for this slice, and a test that runs 5 and asserts a finished mesh
+# would be asserting nothing at all.
+add_test(NAME emergent_native_scene_stream COMMAND emergent_native --scene 7 --frames 240)
+# The amortization itself. The point of the builder is that no single frame pays
+# for the whole slice, and a screenshot cannot show that -- a profile can, and so
+# can the number the binary prints. Asserting the mesh is still the full one
+# alongside it is the other half: a spread-out build that quietly drops geometry
+# would satisfy the first check alone.
+add_test(NAME emergent_native_scene_stream_is_amortized
+         COMMAND emergent_native --scene 7 --frames 240)
+set_tests_properties(emergent_native_scene_stream_is_amortized PROPERTIES
+  PASS_REGULAR_EXPRESSION
+    "Scene mesh: [1-9][0-9]+ vertices.*Scene build: ([2-9]|[1-9][0-9]+) frames")
 # The binary has to say where it is looking for the packed KTX2 maps. It used to
 # find them only by a path relative to the working directory, and find nothing,
 # and say nothing about it: a city with no materials looks like a material bug

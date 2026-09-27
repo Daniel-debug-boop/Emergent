@@ -483,6 +483,129 @@ void test_the_fallback_table_uses_the_same_names() {
 
 }  // namespace
 
+/**
+ * The amortized build must produce the one-shot build, byte for byte.
+ *
+ * This is the whole safety argument for spreading a slice over several frames.
+ * If stepping changed *what* was built rather than only *when*, the streamer
+ * would be a second, subtly different assembler -- and the difference would
+ * only ever show up as a city that looks subtly different after a chunk
+ * boundary, which is not a bug anybody reports.
+ */
+void test_amortized_is_byte_identical_to_one_shot() {
+    const World world = generateWorld(7);
+    const WorldCentre centre = worldCentre(world);
+    SceneBuildOptions o;
+    o.centerX = centre.x;
+    o.centerZ = centre.z;
+    o.radius = 420.0;
+    o.detailLevel = 1;
+
+    const MaterialTable table = testTable();
+    const SceneMesh oneShot = buildSceneMesh(world, table, o);
+
+    // A spread of budgets, from absurdly small to larger than the whole slice.
+    // One of them must be the default the engine uses, so a change there is
+    // caught here rather than in a profile.
+    for (const uint32_t budget : {500u, 4000u, 12000u, 60000u, 400000u}) {
+        SceneBuilder b;
+        b.begin(world, table, o);
+        uint32_t steps = 0;
+        while (!b.complete() && steps < 10000) {
+            b.step(budget);
+            ++steps;
+        }
+        check(b.complete(), "the amortized build finishes");
+        check(steps < 10000, "and does not need an unbounded number of steps");
+        check(b.mesh().vertices.size() == oneShot.vertices.size(),
+              "same vertex count at every budget");
+        check(b.mesh().stats.triangles == oneShot.stats.triangles,
+              "same triangle count at every budget");
+        check(b.mesh().stats.buildings == oneShot.stats.buildings,
+              "same building count at every budget");
+        bool identical = b.mesh().vertices.size() == oneShot.vertices.size();
+        if (identical) {
+            for (size_t i = 0; i < oneShot.vertices.size(); ++i) {
+                if (b.mesh().vertices[i] != oneShot.vertices[i]) {
+                    identical = false;
+                    break;
+                }
+            }
+        }
+        check(identical, "every vertex is identical, not merely the same count");
+    }
+}
+
+void test_no_single_step_is_the_whole_slice() {
+    const World world = generateWorld(7);
+    const WorldCentre centre = worldCentre(world);
+    SceneBuildOptions o;
+    o.centerX = centre.x;
+    o.centerZ = centre.z;
+    o.radius = 420.0;
+    o.detailLevel = 1;
+
+    const MaterialTable table = testTable();
+    SceneBuilder b;
+    b.begin(world, table, o);
+    while (!b.complete()) b.step(12000);
+
+    // The point of the builder. A one-shot build is the entire slice in one
+    // call, so the largest step being a small fraction of the total is the
+    // difference between a frame that hitches and one that does not.
+    check(b.stepCount() > 2, "a 210k-triangle slice takes more than one step");
+    check(b.largestStep() * 4u < b.mesh().stats.triangles,
+          "no single step is a quarter of the slice");
+    check(b.largestStep() > 0, "and the reported largest step is not zero");
+    // A building is emitted whole, so the budget is a soft ceiling: some
+    // overshoot is expected and bounded, an unbounded one is not.
+    check(b.largestStep() < 12000u * 4u, "the overshoot stays within a few buildings");
+}
+
+void test_a_zero_budget_still_makes_progress() {
+    const World world = generateWorld(7);
+    const WorldCentre centre = worldCentre(world);
+    SceneBuildOptions o;
+    o.centerX = centre.x;
+    o.centerZ = centre.z;
+    o.radius = 420.0;
+
+    // A budget of zero with a strict "stop at zero" rule is an infinite loop,
+    // and the kind that only shows up as a hung frame. One building per step is
+    // the only way to make progress, so that is what zero means.
+    const MaterialTable table = testTable();
+    SceneBuilder b;
+    b.begin(world, table, o);
+    uint32_t steps = 0;
+    while (!b.complete() && steps < 5000) {
+        b.step(0);
+        ++steps;
+    }
+    check(b.complete(), "a zero budget still finishes rather than spinning");
+    check(steps < 5000, "and does so in a bounded number of steps");
+}
+
+void test_step_before_begin_is_harmless() {
+    // The engine guards this, but a builder that dereferences nothing is one
+    // fewer thing to reason about at the call site.
+    SceneBuilder b;
+    check(b.step(1000), "stepping a builder that was never begun is a no-op");
+    check(b.complete(), "and leaves it complete rather than half-built");
+    b.reset();
+    check(b.complete(), "reset leaves a reusable builder");
+    const World world = generateWorld(7);
+    const WorldCentre centre = worldCentre(world);
+    SceneBuildOptions o;
+    o.centerX = centre.x;
+    o.centerZ = centre.z;
+    o.radius = 420.0;
+    const MaterialTable table = testTable();
+    b.begin(world, table, o);
+    check(!b.complete(), "begin starts an unfinished build");
+    while (!b.complete()) b.step(12000);
+    check(b.mesh().stats.buildings > 0, "and the reused builder still builds a city");
+}
+
 int main() {
     std::printf("emergent scene mesh tests\n");
     run("the assembler emits a city", test_the_assembler_emits_a_city);
@@ -499,6 +622,10 @@ int main() {
     run("the required material set is complete", test_the_required_material_set_is_complete);
     run("every material the scene names exists in the real bake", test_every_material_the_scene_names_exists_in_the_real_bake);
     run("the fallback table uses the same names", test_the_fallback_table_uses_the_same_names);
+    run("the amortized build is byte-identical to the one-shot build", test_amortized_is_byte_identical_to_one_shot);
+    run("no single step is the whole slice", test_no_single_step_is_the_whole_slice);
+    run("a zero budget still makes progress", test_a_zero_budget_still_makes_progress);
+    run("stepping a builder that was never begun is harmless", test_step_before_begin_is_harmless);
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

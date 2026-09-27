@@ -87,6 +87,32 @@ public:
     void setStreamRadius(double metres) { streamRadius_ = metres; }
 
     /**
+     * Triangles the scene streamer may assemble in one frame.
+     *
+     * The whole slice is 210,628 triangles and takes about 35 ms to build, which
+     * is two 60 Hz frames of nothing but geometry -- a visible hitch every time
+     * the player crosses a chunk boundary. Spreading it costs the same total and
+     * no single frame pays it.
+     *
+     * 12,000 is roughly a third of a frame's budget on this class of machine,
+     * which leaves room for the physics step, the animation sampling and the
+     * draw submission that share the frame. It is a cap and not a target: a step
+     * stops when it has emitted this many, and a single building is emitted whole
+     * so the overshoot is bounded by the largest building in the slice.
+     */
+    void setSceneTriangleBudget(uint32_t triangles) { sceneTriangleBudget_ = triangles; }
+
+    /**
+     * How the last slice was spread over frames.
+     *
+     * Reported because the fix for the 35 ms stall is invisible in a screenshot
+     * and obvious in a profile: a caller can lower the budget and watch the
+     * frame count rise while the mesh stays byte-identical.
+     */
+    uint32_t sceneBuildFrames() const { return sceneBuildFrames_; }
+    uint32_t sceneLargestStep() const { return sceneLargestStep_; }
+
+    /**
      * Where the packed KTX2 material maps are.
      *
      * Set before enableVulkanRenderer(). The backend defaults to a path
@@ -196,6 +222,10 @@ private:
     // holding a null renderer, and a Vulkan renderer borrows the device above.
     RenderBackend *renderer_ = nullptr;
     std::string sceneAssetDirectory_ = "build/native-assets";
+    uint32_t sceneTriangleBudget_ = 12000;
+    /** Frames the last slice took to assemble, and its heaviest single frame. */
+    uint32_t sceneBuildFrames_ = 0;
+    uint32_t sceneLargestStep_ = 0;
     std::unique_ptr<NullRenderBackend> nullRenderer_;
     std::unique_ptr<VulkanRenderBackend> vulkanRenderer_;
 
@@ -204,6 +234,8 @@ private:
     WorldCentre worldCentre_;
     SceneBuildStats sceneStats_;
     SceneMesh sceneMesh_;
+    /** The in-progress slice, so a rebuild costs a few frames rather than one. */
+    SceneBuilder sceneBuilder_;
     double streamRadius_ = 420.0;
     int32_t detailLevel_ = 1;
     /**
@@ -227,6 +259,9 @@ private:
 
     void primeClock();
     void updateScene(const FrameState &state);
+
+    /** Advance the amortized slice build by one frame of work. */
+    void stepSceneBuild();
     bool tickOnce(double delta, FrameState &state);
 };
 
