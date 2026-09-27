@@ -548,6 +548,69 @@ if(UNIX)
 endif()
 add_test(NAME emergent_scene_mesh COMMAND emergent_scene_mesh_test)
 
+# The render graph: resource bookkeeping, hazard derivation, sizing and pass
+# ordering, with no Vulkan in it. Ported from Granite's render_graph (MIT).
+#
+# It is a separate library from the renderer for a reason that is not tidiness:
+# this project has no GPU, so the binding layer can be written but never run.
+# Keeping the derivable part -- what a fraction of the swapchain resolves to,
+# which pass has to precede which, whether a resource may be transient -- on the
+# CPU means that part is checked by ctest on every build instead of being
+# asserted in a comment nobody reads.
+#
+# vulkan_render.cpp still does its own resource management. This is additive on
+# purpose: the graph is proven against its own tests before anything is rewired
+# to use it, so a mistake here cannot take the working scene path down with it.
+add_library(emergent_render_graph STATIC native/src/render_graph.cpp)
+target_include_directories(emergent_render_graph PUBLIC native/include)
+set_target_properties(emergent_render_graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_render_graph PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_render_graph_test native/tests/render_graph_test.cpp)
+target_link_libraries(emergent_render_graph_test PRIVATE emergent_render_graph)
+if(UNIX)
+  target_compile_options(emergent_render_graph_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_render_graph COMMAND emergent_render_graph_test)
+
+# ---------------------------------------------------------------------------
+# The Vulkan binding layer
+# ---------------------------------------------------------------------------
+#
+# The half of this that touches a Vk type. It is a separate library so the
+# translation tables -- format, usage, load/store ops, descriptor layout,
+# barrier planning -- are linked into a test that needs no device, while the
+# part that allocates VkImage and VkBuffer is only reachable on a machine that
+# has a driver. That split is the whole reason the graph was ported with its
+# own `Format` rather than using VkFormat.
+add_library(emergent_render_graph_vulkan STATIC native/src/render_graph_vulkan.cpp)
+target_include_directories(emergent_render_graph_vulkan PUBLIC native/include)
+target_link_libraries(emergent_render_graph_vulkan PUBLIC emergent_render_graph)
+set_target_properties(emergent_render_graph_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_render_graph_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+# Volk, for the same reason the renderer links it: the `vk*` entry points are
+# resolved through the loader at runtime, so this library links and runs on a
+# machine with no Vulkan driver at all.
+#
+# The target is probed directly rather than through EMERGENT_HAS_VOLK because
+# this library is defined before that variable is set, and a cache-order
+# dependency between two unrelated targets is the kind of thing that only
+# breaks on someone else's configure.
+if(TARGET volk)
+  target_link_libraries(emergent_render_graph_vulkan PUBLIC volk)
+endif()
+
+add_executable(emergent_render_graph_vulkan_test native/tests/render_graph_vulkan_test.cpp)
+target_link_libraries(emergent_render_graph_vulkan_test PRIVATE emergent_render_graph_vulkan)
+if(UNIX)
+  target_compile_options(emergent_render_graph_vulkan_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_render_graph_vulkan COMMAND emergent_render_graph_vulkan_test)
+
 # ---------------------------------------------------------------------------
 # Shader compilation
 # ---------------------------------------------------------------------------

@@ -747,6 +747,105 @@ nothing.
 
 `ctest` **18/18**.
 
+## 2026-09-27 — the render graph, on the CPU, before it is on the GPU
+
+`native/src/render_graph.cpp` + `native/include/emergent/render_graph.hpp`,
+ported from Hans-Kristian Arntzen's Granite (`renderer/render_graph.{hpp,cpp}`,
+MIT). `native/tests/render_graph_test.cpp`, 28 tests, 91 assertions.
+
+### Why CPU-only
+
+`vulkan_render.cpp` is 2191 lines — 20% of the 11,093-line native codebase — and
+its `Impl` struct is 102 members spanning 1004 lines, with `open()` a 582-line
+hand-written create/destroy pairing. Every resource added later is another pair
+the author has to keep in step, and a missed destroy is a leak that only shows
+up under a validation layer this project cannot run.
+
+A render graph inverts that: a frame is *declared*, and the graph derives
+barrier placement, layouts, load/store operations, physical image assignment
+and pass order. Declaring is short; deriving is the part that is easy to get
+subtly wrong.
+
+The project has no `/dev/dri` and no `/usr/share/vulkan/icd.d`, so a binding
+layer could be written but never executed. Splitting the derivable part out
+means the part that *can* be proved is proved by ctest on every build, and the
+untestable binding is reduced to a translation from `Format` to `VkFormat`.
+`Format` is deliberately not `VkFormat`, so the header compiles with no Vulkan
+headers at all.
+
+**`vulkan_render.cpp` is untouched.** This is additive on purpose: the graph is
+proven against its own tests before anything is rewired to use it, so a mistake
+here cannot take the working scene path down with it.
+
+### What is actually verified
+
+Sizing, hazard derivation, pass ordering and transience are asserted as
+invariants rather than compared against a recorded frame, because the failure
+modes here do not crash — a barrier for the wrong pair of passes produces a
+correct-looking image three frames later.
+
+- **Sizing.** `SwapchainRelative` resolves a fraction of the swapchain;
+  `Absolute` does not move when the swapchain does; `InputRelative` chains
+  resolve through a forward reference. No extent reaches zero.
+- **Dynamic resolution is a data change, not a promise.** The same declaration
+  re-baked against 1280x720 instead of 1920x1080 resizes a half-scale target
+  from 960x540 to 640x360 with nothing redeclared. That is the whole of the
+  render-scale lever, proven without a GPU.
+- **Ordering.** A pass that samples a target is ordered after every pass that
+  wrote it, *including a pass that wrote it earlier in declaration order*, and
+  two writers of one target are ordered against each other as well. Ties break
+  on declaration order, so the derived order is a function of the declaration
+  and not of set iteration.
+- **Transience.** A resource is transient only when its entire lifetime falls
+  inside one render pass. Buffers never are. A history read never is. The
+  backbuffer never is. Depth needs an explicit device capability; colour does
+  not, and is decided by lifetime alone.
+- **Merging.** A colour output declared to read one of its own pass's inputs
+  merges the two passes, which can make a G-buffer that spans two passes
+  transient. Merging is transitive, and a pair whose extents or formats disagree
+  is refused aliasing rather than quietly collapsed.
+
+### Rejected declarations
+
+Each of these produces a plausible frame rather than an error, so each is an
+exception: a read with no writer, a dependency cycle, a duplicate pass name, a
+name declared as both a texture and a buffer, a sizing cycle, a zero-sized
+backbuffer, an undefined backbuffer format, baking a graph with no passes.
+
+### The controls
+
+`tools/verify/render_graph_controls.sh` mutates the implementation ten ways and
+asserts the suite notices each one: `SwapchainRelative` ignoring `size_y`, the
+min-one extent clamp removed, the mip chain off by one, a cross-pass resource
+allowed to be transient, buffers allowed to be transient, history no longer
+forcing persistence, write-after-write ordering removed, subpass aliasing
+disabled, read-without-write accepted, dependency cycles accepted.
+
+**All ten caught.** The eleventh control is the one that matters most for
+trusting the other ten: a purely cosmetic edit to `describe()` must *not* fail
+the suite, or the suite is over-specified and its passes are not evidence of
+anything. It does not.
+
+The first run caught **two** of these that the suite had missed, and both were
+real implementation bugs rather than test gaps:
+
+- **A re-bake produced no targets at all.** `buildPhysicalSlots` skipped any
+  resource that already had a physical index, so the *second* bake — the one a
+  dynamic-resolution frame performs on every scale change — cleared the slot
+  table, assigned nothing, and every lookup returned nothing. Silent, and it
+  would have looked exactly like a frame with no geometry.
+- **Two passes writing one target were unordered relative to each other.**
+  `deriveDependencies` built edges only for readers, so with no reader between
+  two writers nothing ordered them. A reader was correctly ordered after both,
+  but which writer ran last was left to the tie-break, and the frame declared
+  a final writer that might not have been the last one.
+
+Two more failures were bugs in the tests themselves, recorded because they are
+the same class of error as the ones above: an ordering assertion about an edge
+the test never declared, and a comparison of raw pass indices between two graphs
+whose indices are assigned in declaration order and therefore differ by
+construction.
+
 ## Keeping this honest
 
 `.github/workflows/native.yml` clones the same pinned revisions, configures,
@@ -757,3 +856,67 @@ job fails instead of the problem resurfacing as a mysterious runtime failure.
 It has already earned its place: the Tracy leg is what caught the
 `TRACY_ENABLE` inversion described above, which no default-configuration test
 could ever have found.
+
+## 2026-09-27 — the Vulkan binding layer, and what it caught
+
+`native/src/render_graph_vulkan.cpp` + `native/include/emergent/render_graph_vulkan.hpp`.
+`native/tests/render_graph_vulkan_test.cpp`, 115 assertions.
+`tools/verify/render_graph_vulkan_controls.sh`, 22 mutations.
+
+### The split, and why it is this way
+
+The graph uses its own `Format` rather than `VkFormat` so that the logic deciding
+extents, pass order and transience compiles with no Vulkan headers and is checked
+by ctest on a machine with no driver. This file is the boundary. Everything above
+it is decidable here; everything below it needs a GPU.
+
+So the pure half -- `toVkFormat`, `toVkImageUsage`, `toVkBufferUsage`,
+`attachmentLoadStoreOps`, `deriveDescriptorLayout`, `planBarriers` -- takes no
+device and is tested directly. `GraphResources` and `GraphRenderPasses`, which
+allocate `VkImage`/`VkBuffer` and build render passes, are reachable only on a
+machine with a driver.
+
+### The bug the split was designed to prevent, and the one it actually found
+
+`ResourceDimensions::image_usage` is a mask of `TEXTURE_USAGE_*`, not of
+`VK_IMAGE_USAGE_*`. The two are parallel but not identical, and the bit
+positions coincide for colour and depth -- so casting one to the other produces
+a plausible, wrong flag set: a storage image silently becomes a transfer
+source. Every bit is now translated individually, and a mutation that reverts
+any single translation is caught.
+
+The controls also found a real design fault rather than a missing test.
+`toVkImageLayout` originally derived the layout from the resource alone, which
+meant the layout could never differ between two passes -- so the planner's
+carry-forward was dead code, and a target written as a colour attachment stayed
+in `COLOR_ATTACHMENT_OPTIMAL` for the pass that then sampled it. That is a
+validation error, not a slow frame. The layout is now a function of *use*:
+attachment, sample, or transient. Core Vulkan 1.0 has no read-only depth layout,
+so a depth target that is only sampled lives in `GENERAL`; that is recorded
+here because it looks wrong until you remember the alternative does not exist.
+
+The first version of the test used one texture in a two-pass frame and passed
+while the descriptor planner could hand every texture the same binding number
+and the barrier planner could forget to carry a layout forward -- neither is
+observable with one candidate and one transition. The controls found both. The
+test graph is now three passes sampling three textures, and asserts binding
+uniqueness, descriptor type, and that a texture sampled twice leaves its
+attachment layout once rather than once per reader.
+
+### Verified here
+
+20/20 ctest with `EMERGENT_BUILD_ENGINE=ON`. 115 assertions in the binding
+suite. All 22 negative controls fire, plus a cosmetic edit correctly ignored.
+
+### Not verified here
+
+`GraphResources::create` and `GraphRenderPasses::create` never execute: there is
+no `/dev/dri` and no `/usr/share/vulkan/icd.d`. They compile and link, which
+proves the volk resolution and the API usage, and nothing more. The first
+machine with a Vulkan 1.2+ driver is where image creation, memory-type
+selection, framebuffer construction and the emitted barrier stream are first
+exercised. **FINAL HARDWARE VALIDATION REQUIRED.**
+
+`vulkan_render.cpp` is still untouched, so the renderer still does its own
+resource management. The binding layer is additive until it is proven on real
+hardware, for the same reason the graph was.

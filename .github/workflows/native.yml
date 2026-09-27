@@ -92,6 +92,27 @@ jobs:
       - name: Test
         run: ctest --test-dir build/native --output-on-failure
 
+      # The render graph's negative controls. Ten mutations of the implementation,
+      # each of which the test suite must catch, plus one cosmetic edit it must
+      # ignore. A suite nobody has ever seen fail is not evidence, and these are
+      # the assertions that would otherwise only be a claim in a commit message.
+      # The script restores the source it edits, so it is safe against a dirty
+      # tree, and it runs against a build that is already warm.
+      - name: Render graph negative controls
+        env:
+          EMERGENT_BUILD_DIR: ${{ github.workspace }}/build/native
+        run: bash tools/verify/render_graph_controls.sh
+
+      # The same discipline for the Vulkan binding layer. These are what prove
+      # the translation tables are translation tables and not plausible-looking
+      # constants -- a format that maps to the wrong VkFormat, or a usage bit
+      # copied across instead of translated, produces a frame that renders and
+      # is wrong.
+      - name: Render graph Vulkan binding negative controls
+        env:
+          EMERGENT_BUILD_DIR: ${{ github.workspace }}/build/native
+        run: bash tools/verify/render_graph_vulkan_controls.sh
+
       # The self-test writes a real profile; publishing it makes an
       # unmeasured subsystem visible instead of leaving it implied.
       - name: Upload the profile the self-test produced

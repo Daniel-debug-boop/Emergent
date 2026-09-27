@@ -8,6 +8,12 @@
 #include <vector>
 
 namespace emergent {
+
+// The render graph's GPU object caches, declared here only so this header can
+// befriend them; the definitions live in render_graph_vulkan.hpp.
+class GraphResources;
+class GraphRenderPasses;
+
 struct VulkanCapabilities {
     bool loader = false;
     bool instance = false;
@@ -63,6 +69,12 @@ public:
     void destroyOffscreenSurface();
 private:
     friend class VulkanRenderBackend;
+    // The render graph's GPU object caches need the same device, allocator and
+    // command pool the renderer already uses, for the same reason it does: the
+    // allocator dies with the device, so an allocation made anywhere else
+    // would have to outlive its own owner.
+    friend class GraphResources;
+    friend class GraphRenderPasses;
     void* loader_ = nullptr;
     void* instance_ = nullptr;
     void* physical_device_ = nullptr;
