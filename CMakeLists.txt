@@ -423,8 +423,17 @@ add_test(NAME emergent_world_parity COMMAND emergent_world_parity_test)
 find_program(EMERGENT_NODE node)
 if(EMERGENT_NODE AND EXISTS "${CMAKE_SOURCE_DIR}/assets/textures/materials.mjs")
   set(EMERGENT_BAKED_SIZE 512 CACHE STRING "Texture resolution the native bake is packed at")
+  # The three packs are declared outputs, not side effects. With only the header
+  # declared, the command went "up to date" the moment the header was newer than
+  # its sources -- so deleting 50 MB of KTX2 did not bring it back, and the
+  # renderer and its test ran against a directory that was simply gone. A build
+  # system cannot track what it is not told about.
+  set(EMERGENT_BAKED_PACKS
+    "${CMAKE_SOURCE_DIR}/build/native-assets/albedo.ktx2"
+    "${CMAKE_SOURCE_DIR}/build/native-assets/normal.ktx2"
+    "${CMAKE_SOURCE_DIR}/build/native-assets/arm.ktx2")
   add_custom_command(
-    OUTPUT "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp"
+    OUTPUT "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp" ${EMERGENT_BAKED_PACKS}
     COMMAND "${EMERGENT_NODE}" "${CMAKE_SOURCE_DIR}/tools/assets/textures.mjs"
             --size ${EMERGENT_BAKED_SIZE} --level 6
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -434,7 +443,8 @@ if(EMERGENT_NODE AND EXISTS "${CMAKE_SOURCE_DIR}/assets/textures/materials.mjs")
             "${CMAKE_SOURCE_DIR}/assets/textures/materials.mjs"
     COMMENT "Packing the CC0 bake into build/native-assets/*.ktx2"
     VERBATIM)
-  add_custom_target(emergent_baked_materials DEPENDS "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp")
+  add_custom_target(emergent_baked_materials
+    DEPENDS "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp" ${EMERGENT_BAKED_PACKS})
 endif()
 
 add_library(emergent_materials STATIC native/src/materials.cpp)
@@ -508,6 +518,13 @@ target_compile_definitions(emergent_ktx2_test PRIVATE
   EMERGENT_NATIVE_ASSET_DIR="${CMAKE_SOURCE_DIR}/build/native-assets")
 if(UNIX)
   target_compile_options(emergent_ktx2_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+# The real-pack checks read build/native-assets, and they skip -- loudly, but
+# skip -- when it is absent. Without this dependency a build of this target alone
+# would run them against nothing and report success, which is the one outcome
+# worse than a failure.
+if(TARGET emergent_baked_materials)
+  add_dependencies(emergent_ktx2_test emergent_baked_materials)
 endif()
 add_test(NAME emergent_ktx2 COMMAND emergent_ktx2_test)
 

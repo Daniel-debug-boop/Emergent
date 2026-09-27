@@ -77,18 +77,13 @@ jobs:
             -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
             -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
 
+      # Every target, not a list of them. The list was here to keep the job
+      # quick, and it cost this job twice: ctest reports a test whose executable
+      # was never built as "Not Run" rather than as a build failure, so a new
+      # test that nobody remembered to add to the list passed CI by not existing.
+      # Three of them did exactly that. `all` makes the omission impossible.
       - name: Build
-        run: |
-          cmake --build build/native --target \
-            emergent_native \
-            emergent_benchmark \
-            emergent_physics_test \
-            emergent_animation_test \
-            emergent_asset_pack_test \
-            emergent_profiling_test \
-            emergent_frame_loop_test \
-            emergent_world_parity_test \
-            emergent_material_geometry_test
+        run: cmake --build build/native
 
       # No GPU is present on the runner, so the Vulkan backend reports
       # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
@@ -125,19 +120,11 @@ jobs:
             -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation" \
             -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
             -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
-          # Every test executable, not just the profiling one. emergent_profiling_test
-          # links emergent_animation, so the ozz libraries get built as a side effect
-          # of building it - but the other three test binaries are not dependencies
-          # of anything built here, and ctest reports a missing executable as
-          # "Not Run" rather than as a build failure.
-          cmake --build build/tracy --target \
-            emergent_physics_test \
-            emergent_asset_pack_test \
-            emergent_animation_test \
-            emergent_profiling_test \
-            emergent_frame_loop_test \
-            emergent_world_parity_test \
-            emergent_material_geometry_test
+          # `all` rather than a list, for the reason in the Build step above: a
+          # named list omits new test executables silently, and ctest scores a
+          # missing executable as "Not Run" rather than as a failure. This
+          # configuration turns the engine off, so `all` is still a short build.
+          cmake --build build/tracy
           ctest --test-dir build/tracy --output-on-failure
 
       # The frame loop is the one subsystem whose bugs are invisible: a loop
