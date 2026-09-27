@@ -51,7 +51,16 @@ export const MAP_MODE = {
   /** Project onto world XY. Walls whose normal points along Z. */
   WALL_Z: 2,
   /** No texture. Vertex colour only. */
-  SOLID: 3
+  SOLID: 3,
+  /**
+   * Use the vertex's own texture coordinate.
+   *
+   * For imported models, and only for them. Box mapping assumes an axis-aligned
+   * world-space surface, which is true of everything this project generates and
+   * false of a chair leg at 30 degrees — there is no projection that puts a
+   * wood grain along a tapered leg. An imported mesh carries UVs and uses them.
+   */
+  UV: 4
 };
 
 /**
@@ -139,7 +148,9 @@ export function buildMaterialTable(baked) {
     a[i * 4 + 3] = e.metallic;
     b[i * 4 + 0] = e.mapMode;
     b[i * 4 + 1] = e.normalStrength;
-    b[i * 4 + 2] = emissiveById.get(e.id) || 0;
+    // A textured entry carries its emissive on the entry itself, which is how
+    // an imported lamp glass can glow without being a SOLID_MATERIAL.
+    b[i * 4 + 2] = e.emissive !== undefined ? e.emissive : (emissiveById.get(e.id) || 0);
     b[i * 4 + 3] = e.textured ? 1 : 0;
   });
 
@@ -162,6 +173,34 @@ export function buildMaterialTable(baked) {
 function GROUND_FOR_ROLE(role) {
   if (/road|pavement|street|shoulder|ground|terrain|beach|hardstanding|plaza/.test(role)) return MAP_MODE.GROUND;
   return MAP_MODE.WALL_X;
+}
+
+/**
+ * A material entry for an imported model.
+ *
+ * Imported assets are not box-projected and are not placed in world-aligned
+ * rooms, so their materials are declared UV-mapped and the shader reads the
+ * vertex coordinate instead of deriving one. Keeping them in the same table is
+ * the point: there is still one shader and one index space, and an imported
+ * armchair is a material index like any other.
+ *
+ * @param {string} id
+ * @param {number} layer
+ * @param {object} [opts]
+ * @returns {object} A table entry, shaped like the ones buildMaterialTable makes.
+ */
+export function importedMaterial(id, layer, opts = {}) {
+  return {
+    id, textured: true, layer,
+    // An imported mesh's UVs are already in tile units at the authored scale, so
+    // the tiling multiplier defaults to 1 and is only overridden deliberately.
+    invTileScale: 1 / (opts.tileScale || 1),
+    roughness: opts.roughness !== undefined ? opts.roughness : 0.7,
+    metallic: opts.metallic !== undefined ? opts.metallic : 0,
+    mapMode: MAP_MODE.UV,
+    normalStrength: opts.normalStrength !== undefined ? opts.normalStrength : 1.0,
+    emissive: opts.emissive || 0
+  };
 }
 
 /**

@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-27T03:36:16.425Z",
+  "generated": "2026-09-27T05:20:38.418Z",
   "materials": [
     {
       "id": "road_asphalt",
@@ -16,19 +16,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "2k",
+        "source_resolution": "8k",
         "fetched": "2026-09-27"
       },
       "measured": {
-        "albedoMeanLuma": 89.6,
-        "albedoStddev": 16.1,
-        "seamRatio": 1.16,
+        "albedoMeanLuma": 89.5,
+        "albedoStddev": 22.1,
+        "seamRatio": 1.17,
         "armAo": 0.72,
         "armRoughness": 0.77,
-        "armMetallic": 0.013,
+        "armMetallic": 0.006,
         "normalBlue": 0.973
       },
-      "bytes": 769121
+      "bytes": 3066274
     },
     {
       "id": "road_asphalt_worn",
@@ -45,19 +45,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 58.6,
-        "albedoStddev": 10.1,
-        "seamRatio": 1.06,
+        "albedoStddev": 11.6,
+        "seamRatio": 1.02,
         "armAo": 0.641,
         "armRoughness": 0.875,
-        "armMetallic": 0.013,
-        "normalBlue": 0.891
+        "armMetallic": 0.002,
+        "normalBlue": 0.892
       },
-      "bytes": 773058
+      "bytes": 3067067
     },
     {
       "id": "pavement_concrete",
@@ -74,19 +74,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 124.5,
-        "albedoStddev": 12.1,
-        "seamRatio": 1.52,
+        "albedoStddev": 16,
+        "seamRatio": 1.55,
         "armAo": 0.917,
         "armRoughness": 0.784,
-        "armMetallic": 0.003,
-        "normalBlue": 0.943
+        "armMetallic": 0.001,
+        "normalBlue": 0.947
       },
-      "bytes": 730747
+      "bytes": 2974575
     },
     {
       "id": "pavement_pavers",
@@ -103,19 +103,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
-        "albedoMeanLuma": 98.6,
-        "albedoStddev": 10.9,
-        "seamRatio": 2.51,
+        "albedoMeanLuma": 98.5,
+        "albedoStddev": 11.6,
+        "seamRatio": 1.8,
         "armAo": 0.951,
         "armRoughness": 0.874,
         "armMetallic": 0.001,
-        "normalBlue": 0.98
+        "normalBlue": 0.982
       },
-      "bytes": 629492
+      "bytes": 2661834
     },
     {
       "id": "street_cobble",
@@ -132,19 +132,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 102.7,
-        "albedoStddev": 25.5,
-        "seamRatio": 1.21,
+        "albedoStddev": 27.6,
+        "seamRatio": 0.94,
         "armAo": 0.818,
         "armRoughness": 0.922,
-        "armMetallic": 0.004,
-        "normalBlue": 0.959
+        "armMetallic": 0.002,
+        "normalBlue": 0.961
       },
-      "bytes": 761238
+      "bytes": 2999389
     },
     {
       "id": "ground_gravel",
@@ -161,19 +161,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
-        "albedoMeanLuma": 104.6,
-        "albedoStddev": 29,
-        "seamRatio": 1.09,
+        "albedoMeanLuma": 104.5,
+        "albedoStddev": 35.4,
+        "seamRatio": 1.01,
         "armAo": 0.757,
         "armRoughness": 0.792,
-        "armMetallic": 0.013,
-        "normalBlue": 0.898
+        "armMetallic": 0.002,
+        "normalBlue": 0.9
       },
-      "bytes": 781536
+      "bytes": 3114371
     },
     {
       "id": "wall_brick",
@@ -190,19 +190,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "2k",
+        "source_resolution": "8k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 125.9,
-        "albedoStddev": 28,
-        "seamRatio": 2.07,
+        "albedoStddev": 30.2,
+        "seamRatio": 1.7,
         "armAo": 0.838,
         "armRoughness": 0.787,
         "armMetallic": 0.001,
         "normalBlue": 0.962
       },
-      "bytes": 714834
+      "bytes": 2725807
     },
     {
       "id": "wall_brick_dark",
@@ -219,19 +219,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 55.7,
-        "albedoStddev": 20.5,
-        "seamRatio": 1.18,
+        "albedoStddev": 21.1,
+        "seamRatio": 1.17,
         "armAo": 0.846,
         "armRoughness": 0.787,
-        "armMetallic": 0.004,
-        "normalBlue": 0.974
+        "armMetallic": 0.001,
+        "normalBlue": 0.975
       },
-      "bytes": 674018
+      "bytes": 2720785
     },
     {
       "id": "wall_plaster",
@@ -248,19 +248,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 135.7,
-        "albedoStddev": 9.6,
-        "seamRatio": 1.53,
+        "albedoStddev": 14.7,
+        "seamRatio": 1.46,
         "armAo": 0.673,
         "armRoughness": 0.907,
-        "armMetallic": 0.007,
-        "normalBlue": 0.989
+        "armMetallic": 0.008,
+        "normalBlue": 0.991
       },
-      "bytes": 751978
+      "bytes": 3039102
     },
     {
       "id": "wall_plaster_dirty",
@@ -277,19 +277,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
-        "albedoMeanLuma": 126.5,
-        "albedoStddev": 7.4,
-        "seamRatio": 1.15,
-        "armAo": 0.998,
+        "albedoMeanLuma": 126.4,
+        "albedoStddev": 7.8,
+        "seamRatio": 1.11,
+        "armAo": 0.999,
         "armRoughness": 0.911,
-        "armMetallic": 0.001,
-        "normalBlue": 0.997
+        "armMetallic": 0,
+        "normalBlue": 0.998
       },
-      "bytes": 580395
+      "bytes": 2460797
     },
     {
       "id": "wall_concrete",
@@ -306,19 +306,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 97.1,
-        "albedoStddev": 4.5,
-        "seamRatio": 1.16,
+        "albedoStddev": 4.9,
+        "seamRatio": 1.13,
         "armAo": 0.945,
         "armRoughness": 0.799,
         "armMetallic": 0.002,
-        "normalBlue": 0.991
+        "normalBlue": 0.993
       },
-      "bytes": 642203
+      "bytes": 2661948
     },
     {
       "id": "wall_painted_concrete",
@@ -335,19 +335,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 96.7,
-        "albedoStddev": 24.6,
-        "seamRatio": 0.67,
+        "albedoStddev": 26.9,
+        "seamRatio": 0.72,
         "armAo": 0.75,
         "armRoughness": 0.772,
-        "armMetallic": 0.007,
-        "normalBlue": 0.994
+        "armMetallic": 0.004,
+        "normalBlue": 0.995
       },
-      "bytes": 704475
+      "bytes": 2857024
     },
     {
       "id": "wall_stone",
@@ -364,19 +364,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 157.8,
-        "albedoStddev": 32,
-        "seamRatio": 0.93,
+        "albedoStddev": 33.1,
+        "seamRatio": 1.13,
         "armAo": 0.861,
         "armRoughness": 0.833,
-        "armMetallic": 0.005,
-        "normalBlue": 0.962
+        "armMetallic": 0.003,
+        "normalBlue": 0.964
       },
-      "bytes": 720460
+      "bytes": 2802809
     },
     {
       "id": "wall_siding",
@@ -393,19 +393,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 68.1,
-        "albedoStddev": 12.5,
-        "seamRatio": 2.8,
+        "albedoStddev": 13.8,
+        "seamRatio": 1.92,
         "armAo": 0.978,
         "armRoughness": 0.843,
         "armMetallic": 0.006,
-        "normalBlue": 0.987
+        "normalBlue": 0.988
       },
-      "bytes": 676804
+      "bytes": 2842108
     },
     {
       "id": "wall_metal_shutter",
@@ -422,19 +422,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 130.6,
-        "albedoStddev": 13.3,
-        "seamRatio": 1.35,
+        "albedoStddev": 14.5,
+        "seamRatio": 1.01,
         "armAo": 0.881,
         "armRoughness": 0.633,
-        "armMetallic": 0.004,
-        "normalBlue": 0.962
+        "armMetallic": 0.002,
+        "normalBlue": 0.963
       },
-      "bytes": 516508
+      "bytes": 2217367
     },
     {
       "id": "wall_corrugated",
@@ -451,19 +451,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 49.6,
-        "albedoStddev": 13.3,
-        "seamRatio": 0.4,
+        "albedoStddev": 13.9,
+        "seamRatio": 0.62,
         "armAo": 0.81,
         "armRoughness": 0.936,
-        "armMetallic": 0.002,
+        "armMetallic": 0.001,
         "normalBlue": 0.934
       },
-      "bytes": 686616
+      "bytes": 2757240
     },
     {
       "id": "metal_rust",
@@ -480,19 +480,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 145.7,
-        "albedoStddev": 22.5,
-        "seamRatio": 0.92,
+        "albedoStddev": 22.8,
+        "seamRatio": 1.01,
         "armAo": 0.767,
-        "armRoughness": 0.423,
-        "armMetallic": 0.005,
-        "normalBlue": 0.996
+        "armRoughness": 0.422,
+        "armMetallic": 0.006,
+        "normalBlue": 0.998
       },
-      "bytes": 731773
+      "bytes": 2854610
     },
     {
       "id": "metal_plate",
@@ -509,19 +509,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "2k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 74.3,
-        "albedoStddev": 7.8,
-        "seamRatio": 1.26,
-        "armAo": 0.958,
+        "albedoStddev": 8.5,
+        "seamRatio": 1.05,
+        "armAo": 0.957,
         "armRoughness": 0.659,
-        "armMetallic": 0.911,
+        "armMetallic": 0.91,
         "normalBlue": 0.997
       },
-      "bytes": 580129
+      "bytes": 2131363
     },
     {
       "id": "terrain_grass",
@@ -538,19 +538,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "2k",
+        "source_resolution": "8k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 96.7,
-        "albedoStddev": 7.4,
-        "seamRatio": 1,
+        "albedoStddev": 9.3,
+        "seamRatio": 1.03,
         "armAo": 0.798,
         "armRoughness": 0.937,
-        "armMetallic": 0.002,
+        "armMetallic": 0.001,
         "normalBlue": 0.88
       },
-      "bytes": 770684
+      "bytes": 3081667
     },
     {
       "id": "terrain_dirt",
@@ -567,19 +567,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 84.3,
-        "albedoStddev": 6.5,
-        "seamRatio": 1.08,
+        "albedoStddev": 7.9,
+        "seamRatio": 1.07,
         "armAo": 0.896,
         "armRoughness": 0.944,
-        "armMetallic": 0.003,
-        "normalBlue": 0.959
+        "armMetallic": 0.001,
+        "normalBlue": 0.963
       },
-      "bytes": 741130
+      "bytes": 2920269
     },
     {
       "id": "terrain_mud",
@@ -596,19 +596,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 38.7,
-        "albedoStddev": 16.2,
-        "seamRatio": 1.18,
+        "albedoStddev": 17.8,
+        "seamRatio": 1.13,
         "armAo": 0.837,
         "armRoughness": 0.918,
-        "armMetallic": 0.005,
-        "normalBlue": 0.886
+        "armMetallic": 0.002,
+        "normalBlue": 0.887
       },
-      "bytes": 750743
+      "bytes": 2962734
     },
     {
       "id": "terrain_rock",
@@ -625,19 +625,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "4k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 107.7,
-        "albedoStddev": 28.1,
-        "seamRatio": 1.16,
+        "albedoStddev": 36.3,
+        "seamRatio": 1.09,
         "armAo": 0.399,
         "armRoughness": 0.813,
-        "armMetallic": 0.015,
+        "armMetallic": 0.011,
         "normalBlue": 0.874
       },
-      "bytes": 772072
+      "bytes": 3078311
     },
     {
       "id": "terrain_sand",
@@ -654,19 +654,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "2k",
         "fetched": "2026-09-27"
       },
       "measured": {
-        "albedoMeanLuma": 87,
-        "albedoStddev": 7.8,
-        "seamRatio": 1.09,
+        "albedoMeanLuma": 87.1,
+        "albedoStddev": 12.5,
+        "seamRatio": 1.13,
         "armAo": 0.92,
         "armRoughness": 0.84,
-        "armMetallic": 0.002,
-        "normalBlue": 0.926
+        "armMetallic": 0.003,
+        "normalBlue": 0.924
       },
-      "bytes": 733238
+      "bytes": 2999510
     },
     {
       "id": "floor_concrete",
@@ -683,19 +683,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "2k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 108.4,
-        "albedoStddev": 21.8,
-        "seamRatio": 1.04,
+        "albedoStddev": 24.6,
+        "seamRatio": 1.02,
         "armAo": 0.814,
         "armRoughness": 0.525,
         "armMetallic": 0.007,
-        "normalBlue": 0.982
+        "normalBlue": 0.983
       },
-      "bytes": 759477
+      "bytes": 3011961
     },
     {
       "id": "floor_wood",
@@ -712,19 +712,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "2k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 86.5,
-        "albedoStddev": 18,
-        "seamRatio": 0.68,
+        "albedoStddev": 18.5,
+        "seamRatio": 0.71,
         "armAo": 0.951,
         "armRoughness": 0.377,
         "armMetallic": 0.003,
         "normalBlue": 0.998
       },
-      "bytes": 659133
+      "bytes": 2741906
     },
     {
       "id": "floor_tile",
@@ -741,19 +741,19 @@
         "license": "CC0",
         "license_url": "https://polyhaven.com/license",
         "original_format": "jpeg",
-        "source_resolution": "1k",
+        "source_resolution": "2k",
         "fetched": "2026-09-27"
       },
       "measured": {
         "albedoMeanLuma": 126.7,
-        "albedoStddev": 22.8,
-        "seamRatio": 1.19,
+        "albedoStddev": 23.7,
+        "seamRatio": 0.98,
         "armAo": 0.778,
         "armRoughness": 0.815,
-        "armMetallic": 0.007,
-        "normalBlue": 0.99
+        "armMetallic": 0.008,
+        "normalBlue": 0.989
       },
-      "bytes": 660982
+      "bytes": 2651825
     }
   ]
 }

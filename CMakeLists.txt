@@ -345,7 +345,16 @@ endif()
 add_library(emergent_frame_loop STATIC
   native/src/frame_loop.cpp)
 target_include_directories(emergent_frame_loop PUBLIC native/include)
-target_link_libraries(emergent_frame_loop PUBLIC emergent_physics emergent_animation emergent_profiling)
+# emergent_animation is conditional on an ozz tree being supplied, so it cannot
+# be named here unconditionally. Naming it anyway makes the link fail with a
+# bare `-lemergent_animation: No such file` in any configuration without ozz --
+# which is exactly the configuration whose whole purpose is to build the parts
+# that do not need a third-party tree. The frame loop degrades to physics and
+# profiling rather than failing to link.
+target_link_libraries(emergent_frame_loop PUBLIC emergent_physics emergent_profiling)
+if(TARGET emergent_animation)
+  target_link_libraries(emergent_frame_loop PUBLIC emergent_animation)
+endif()
 set_target_properties(emergent_frame_loop PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(UNIX)
   target_compile_options(emergent_frame_loop PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
@@ -369,6 +378,60 @@ if(UNIX)
   target_compile_options(emergent_frame_loop_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME emergent_frame_loop COMMAND emergent_frame_loop_test)
+
+# ---------------------------------------------------------------------------
+# The world, generated in C++
+# ---------------------------------------------------------------------------
+# The native renderer is no longer a debug presentation layer over a scene of
+# boxes: it generates and draws the same city the JavaScript reference does,
+# from the same seed, with the same integer draws. `world_gen.cpp` is a port of
+# `world.mjs` and the parity test below is what makes that claim checkable
+# rather than aspirational -- it compares the C++ against a fixture generated
+# from the JavaScript, so a divergence in the hash functions shows up as a moved
+# building rather than as a subtly different skyline nobody mentions.
+add_library(emergent_world STATIC native/src/world_gen.cpp)
+target_include_directories(emergent_world PUBLIC native/include)
+set_target_properties(emergent_world PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_world PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_world_parity_test native/tests/world_parity_test.cpp)
+target_link_libraries(emergent_world_parity_test PRIVATE emergent_world)
+if(UNIX)
+  target_compile_options(emergent_world_parity_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_world_parity COMMAND emergent_world_parity_test)
+
+# ---------------------------------------------------------------------------
+# The material system and the geometry emitters
+# ---------------------------------------------------------------------------
+# The renderer draws real geometry with real materials, not debug boxes. These
+# two libraries are that world description in C++: the material table the
+# shader resolves an index through, and the detail kit that fills a facade with
+# windows, a cornice and roof plant. They depend on nothing upstream, so they
+# build and are tested on a machine with no Vulkan, no driver and no GPU.
+add_library(emergent_materials STATIC native/src/materials.cpp)
+target_include_directories(emergent_materials PUBLIC native/include)
+set_target_properties(emergent_materials PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_materials PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_library(emergent_geometry STATIC native/src/geometry.cpp)
+target_include_directories(emergent_geometry PUBLIC native/include)
+target_link_libraries(emergent_geometry PUBLIC emergent_materials)
+set_target_properties(emergent_geometry PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_geometry PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_material_geometry_test native/tests/material_geometry_test.cpp)
+target_link_libraries(emergent_material_geometry_test PRIVATE emergent_geometry)
+if(UNIX)
+  target_compile_options(emergent_material_geometry_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_material_geometry COMMAND emergent_material_geometry_test)
 
 # ---------------------------------------------------------------------------
 # Shader compilation

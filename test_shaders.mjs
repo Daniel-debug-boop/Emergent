@@ -187,23 +187,26 @@ await test('the scene vertex shader reads every vertex attribute the buffers sup
   // that reads only the first three uploads a perfectly valid, perfectly
   // ignored attribute and every test in the suite still passes.
   const read = readAttributes(sources.sceneVS);
-  assertEqual(read.size, 4, 'the scene vertex shader should read exactly four attributes');
+  assertEqual(read.size, 5, 'the scene vertex shader should read exactly five attributes');
   assertEqual(read.get(0), 'p', 'location 0 is position');
   assertEqual(read.get(1), 'n', 'location 1 is normal');
   assertEqual(read.get(2), 'c', 'location 2 is colour');
   assertEqual(read.get(3), 'm', 'location 3 is the material index');
+  assertEqual(read.get(4), 'uv', 'location 4 is the texture coordinate an imported mesh needs');
 
-  // And the buffer has to match: setAttributePointers must point all four.
+  // And the buffer has to match: setAttributePointers must point all five, at
+  // the right sizes and offsets. A stream the shader reads but the buffer does
+  // not supply is exactly the class of bug that hid the material system.
   const ptrRe = /vertexAttribPointer\((\d),(\d),gl\.FLOAT,false,(?:VERTEX_BYTES|STRIDE),(\d+)\)/g;
   const pointers = new Map();
   let m;
-  while ((m = ptrRe.exec(gameSource))) pointers.set(Number(m[1]), Number(m[2]));
-  for (const [loc, size] of [[0, 3], [1, 3], [2, 3], [3, 1]]) {
-    assertEqual(
-      pointers.get(loc),
-      size,
-      `vertexAttribPointer(${loc}) should supply ${size} floats to match the shader's declaration`
-    );
+  while ((m = ptrRe.exec(gameSource))) pointers.set(Number(m[1]), [Number(m[2]), Number(m[3])]);
+  const expected = [[0, 3, 0], [1, 3, 12], [2, 3, 24], [3, 1, 36], [4, 2, 40]];
+  for (const [loc, size, offset] of expected) {
+    const got = pointers.get(loc);
+    assert(got, `vertexAttribPointer(${loc}) is missing — the shader reads a stream nothing supplies`);
+    assertEqual(got[0], size, `vertexAttribPointer(${loc}) should supply ${size} floats`);
+    assertEqual(got[1], offset, `vertexAttribPointer(${loc}) should start at byte ${offset}`);
   }
 });
 
@@ -230,6 +233,12 @@ await test('the scene shader samples the material texture arrays it is given', (
     'the vertex shader must read the material index attribute');
   assert(/out\s+float\s+vMat/.test(sources.sceneVS), 'the vertex shader must pass the material index through');
   assert(/in\s+float\s+vMat/.test(fs), 'the fragment shader must receive the material index');
+  // The UV branch has to exist and has to be selected by the material's map
+  // mode, or an imported mesh is box-projected and its own coordinates ignored.
+  assert(/step\(3\.5,mode\)/.test(sources.sceneVS),
+    'the vertex shader must select the UV path for MAP_MODE.UV materials');
+  assert(/dFdx\(vUV\)/.test(fs) && /dFdx\(vP\)/.test(fs),
+    'a UV-mapped surface needs a derivative tangent frame or its normal map is in the wrong space');
 });
 
 await test('the material table uniform arrays are sized from MAX_MATERIALS', () => {

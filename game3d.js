@@ -410,29 +410,35 @@ const MAT_UNIFORMS = MAX_MATERIALS;
 
 const sceneVS = `#version 300 es
 precision highp float;
-layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c; layout(location=3) in float m;
+layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c; layout(location=3) in float m; layout(location=4) in vec2 uv;
 uniform mat4 uPV; uniform vec3 uCam; uniform float uTime; uniform float uWater;
 uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
-out vec3 vN; out vec3 vC; out float vD; out vec3 vP; out vec2 vUV; out float vMat; out float vT;
+out vec3 vN; out vec3 vC; out float vD; out vec3 vP; out vec2 vUV; out float vMat; out float vT; out float vUseUV;
 void main(){
   vec3 q=p; if(uWater>0.5) q.y += sin(q.x*0.025+uTime*1.6)*0.08 + cos(q.z*0.021+uTime)*0.06;
   gl_Position=uPV*vec4(q,1.0);
   vN=n; vC=c; vD=distance(q,uCam); vP=q; vMat=m;
   int mi=int(m+0.5);
+  float mode=uMatB[mi].x;
   // Box mapping. The plane comes from the material's recorded role rather than
   // from the normal, so a road tiles as ground and a facade tiles as a wall
   // even where a chamfer or a pitched roof made the normal ambiguous. World
   // locked, so a brick wall's bricks stay put while the player walks past.
-  float mode=uMatB[mi].x;
-  vec2 uv = p.xz;
-  if(mode>0.5 && mode<1.5) uv=p.zy; else if(mode>1.5 && mode<2.5) uv=p.xy;
-  vUV=uv*uMatA[mi].y;
+  //
+  // MAP_MODE.UV is the exception: an imported mesh brings its own coordinates
+  // because no world-axis projection can put a wood grain along a tapered leg.
+  // The flag is interpolated so the branch happens once per vertex, not once
+  // per fragment.
+  vUseUV=step(3.5,mode);
+  vec2 proj = p.xz;
+  if(mode>0.5 && mode<1.5) proj=p.zy; else if(mode>1.5 && mode<2.5) proj=p.xy;
+  vUV=mix(proj*uMatA[mi].y, uv, vUseUV);
   vT=uMatB[mi].w;
 }`;
 
 const sceneFS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec3 vC; in float vD; in vec3 vP; in vec2 vUV; in float vMat; in float vT;
+in vec3 vN; in vec3 vC; in float vD; in vec3 vP; in vec2 vUV; in float vMat; in float vT; in float vUseUV;
 uniform vec3 uSun; uniform vec3 uFog; uniform vec3 uAmbient; uniform float uFogDensity; uniform float uNight; uniform float uWater;
 uniform vec3 uSunColor; uniform vec3 uSkyColor; uniform vec3 uGroundColor;
 uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
@@ -458,12 +464,25 @@ void main(){
     vec4 alb=texture(uAlbedoTex,vec3(vUV,float(layer)));
     vec4 arm=texture(uArmTex,vec3(vUV,float(layer)));
     vec3 nt=texture(uNormalTex,vec3(vUV,float(layer))).xyz*2.0-1.0;
-    // A tangent frame derived from the projection the UV came from. There are
-    // no tangents in the vertex format because every textured surface here is a
-    // box-projected plane, so the tangent is one world axis and costs nothing.
-    vec3 up=abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0);
-    vec3 T=normalize(cross(up,N));
-    vec3 Bt=cross(N,T);
+    vec3 T,Bt;
+    if(vUseUV>0.5){
+      // Screen-space derivatives of position and UV give the tangent frame for
+      // an arbitrary mesh without storing tangents, which is the standard
+      // technique and costs two derivatives instead of four floats a vertex.
+      // Degenerate when a triangle is edge-on or has a mirrored UV island, so it
+      // falls back to an arbitrary perpendicular rather than a NaN.
+      vec3 dp1=dFdx(vP), dp2=dFdy(vP);
+      vec2 du1=dFdx(vUV), du2=dFdy(vUV);
+      float det=du1.x*du2.y-du1.y*du2.x;
+      vec3 Tt=abs(det)>1e-12?(dp1*du2.y-dp2*du1.y)/det:vec3(0.0);
+      T=normalize(Tt-N*dot(N,Tt));
+      if(dot(T,T)<0.5) T=normalize(cross(abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0),N));
+    } else {
+      // A box-projected surface's tangent is one world axis, derived from the
+      // same plane the coordinate came from. No tangents in the vertex format.
+      T=normalize(cross(abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0),N));
+    }
+    Bt=cross(N,T);
     nt.xy*=B.y;
     albedo*=alb.rgb;
     ao=arm.r; rough=clamp(arm.g,0.04,1.0); metal=arm.b;
@@ -537,6 +556,7 @@ function setAttributePointers(){
   gl.vertexAttribPointer(1,3,gl.FLOAT,false,VERTEX_BYTES,12);
   gl.vertexAttribPointer(2,3,gl.FLOAT,false,VERTEX_BYTES,24);
   gl.vertexAttribPointer(3,1,gl.FLOAT,false,VERTEX_BYTES,36);
+  gl.vertexAttribPointer(4,2,gl.FLOAT,false,VERTEX_BYTES,40);
 }
 gl.bindVertexArray(vao);
 gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
@@ -544,6 +564,7 @@ gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,STRIDE,
 gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,STRIDE,12);
 gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,3,gl.FLOAT,false,STRIDE,24);
 gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3,1,gl.FLOAT,false,STRIDE,36);
+gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4,2,gl.FLOAT,false,STRIDE,40);
 gl.bindVertexArray(null);
 
 // Matrix math (perspective, look-at, multiply, point transform) lives in

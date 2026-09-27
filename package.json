@@ -26,6 +26,8 @@
     "assets:fetch": "node tools/assets/fetch.mjs",
     "assets:bake": "node tools/assets/bake.mjs",
     "assets:probe": "node tools/assets/probe.mjs",
+    "test:fixture": "node tools/gen_world_fixture.mjs",
+    "assets:models": "node tools/assets/models.js",
     "assets:audit": "node tools/assets/audit.mjs"
   },
   "dependencies": {
@@ -33,6 +35,7 @@
   },
   "devDependencies": {
     "@shaderfrog/glsl-parser": "^7.0.1",
+    "meshoptimizer": "^1.3.0",
     "sharp": "^0.34.4"
   }
 }

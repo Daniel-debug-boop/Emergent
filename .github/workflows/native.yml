@@ -86,7 +86,9 @@ jobs:
             emergent_animation_test \
             emergent_asset_pack_test \
             emergent_profiling_test \
-            emergent_frame_loop_test
+            emergent_frame_loop_test \
+            emergent_world_parity_test \
+            emergent_material_geometry_test
 
       # No GPU is present on the runner, so the Vulkan backend reports
       # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
@@ -133,7 +135,9 @@ jobs:
             emergent_asset_pack_test \
             emergent_animation_test \
             emergent_profiling_test \
-            emergent_frame_loop_test
+            emergent_frame_loop_test \
+            emergent_world_parity_test \
+            emergent_material_geometry_test
           ctest --test-dir build/tracy --output-on-failure
 
       # The frame loop is the one subsystem whose bugs are invisible: a loop
