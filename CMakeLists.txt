@@ -587,20 +587,33 @@ add_test(NAME emergent_adaptive COMMAND emergent_adaptive_test)
 # than a second one. Plain C++ with no Vulkan in it, for the same reason as
 # adaptive and render_graph: an error budget that is wrong does not crash, it
 # makes a city melt at 80 m, and that failure survives a screenshot review.
-add_library(emergent_lod STATIC native/src/lod.cpp)
-target_include_directories(emergent_lod PUBLIC native/include)
-target_link_libraries(emergent_lod PUBLIC meshoptimizer)
-set_target_properties(emergent_lod PROPERTIES POSITION_INDEPENDENT_CODE ON)
-if(UNIX)
-  target_compile_options(emergent_lod PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
-endif()
+#
+# Guarded on the meshoptimizer target existing, for the same reason the Volk
+# binding below is. lod.cpp includes <meshoptimizer.h>, and target_link_libraries
+# against a name that is not a target does not fail -- CMake passes it to the
+# linker as a plain -l flag, so the include path silently never arrives and the
+# build dies later at "meshoptimizer.h: No such file or directory". That is
+# exactly the configuration the Tracy job uses: EMERGENT_BUILD_ENGINE=OFF with
+# no meshoptimizer tree. The skip is announced rather than silent, because a
+# test that quietly does not exist reads as a pass.
+if(TARGET meshoptimizer)
+  add_library(emergent_lod STATIC native/src/lod.cpp)
+  target_include_directories(emergent_lod PUBLIC native/include)
+  target_link_libraries(emergent_lod PUBLIC meshoptimizer)
+  set_target_properties(emergent_lod PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(UNIX)
+    target_compile_options(emergent_lod PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+  endif()
 
-add_executable(emergent_lod_test native/tests/lod_test.cpp)
-target_link_libraries(emergent_lod_test PRIVATE emergent_lod meshoptimizer)
-if(UNIX)
-  target_compile_options(emergent_lod_test PRIVATE -Wall -Wextra -Wpedantic)
+  add_executable(emergent_lod_test native/tests/lod_test.cpp)
+  target_link_libraries(emergent_lod_test PRIVATE emergent_lod meshoptimizer)
+  if(UNIX)
+    target_compile_options(emergent_lod_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME emergent_lod COMMAND emergent_lod_test)
+else()
+  message(STATUS "meshoptimizer is unavailable; the emergent_lod target and its test will not be built. The default CI configuration has it and is where that coverage lives.")
 endif()
-add_test(NAME emergent_lod COMMAND emergent_lod_test)
 
 add_library(emergent_render_graph STATIC native/src/render_graph.cpp)
 target_include_directories(emergent_render_graph PUBLIC native/include)
