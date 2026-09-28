@@ -37,6 +37,105 @@ bool NativeEngine::reconfigureFrameLoop(const FrameLoopConfig &config) {
     return true;
 }
 
+/**
+ * One simulation step plus the scene streaming it implies.
+ *
+ * Every path that advances a frame goes through here. `runHeadless` and
+ * `runRealtime` tick the loop directly rather than calling updateFrame, so
+ * without this the world is generated, the spawn moves downtown, and the slice
+ * is still empty at the end of a headless run — which is exactly what happened
+ * before this existed, and exactly what a CI check on the streamed scene would
+ * have caught.
+ */
+bool NativeEngine::tickOnce(double delta, FrameState &state) {
+    if (!loop_.tick(delta, input_, state)) return false;
+    {
+        const profile::Scope scene("frame.scene_stream");
+        updateScene(state);
+    }
+    return true;
+}
+
+bool NativeEngine::buildWorld(int32_t seed) {
+    world_ = generateWorld(seed);
+    // Not centred on the origin: the generated layout puts the built-up part
+    // wherever the region noise put it, and for a typical seed the nearest
+    // building to (0,0) is several hundred metres away. Streaming from the
+    // origin would stream nothing.
+    worldCentre_ = ::emergent::worldCentre(world_);
+    // Spawn downtown. Without this the player starts a kilometre from the first
+    // building, and the streamed slice is built around an empty field.
+    loop_.setSpawn(worldCentre_.x, worldCentre_.z, terrainHeight(worldCentre_.x, worldCentre_.z, seed));
+    // Force the next frame to rebuild regardless of where the player is.
+    sceneChunkX_ = 1e18;
+    sceneChunkZ_ = 1e18;
+    return true;
+}
+
+/**
+ * Rebuild the scene if the player has crossed a chunk boundary.
+ *
+ * Closed loop on purpose: the chunk index is quantised, so a rebuild happens
+ * when the player moves a whole chunk rather than every frame. The loop that
+ * caused trouble on the web side streamed on an exact position comparison, and
+ * the distance rebuild could not change, so it never closed.
+ */
+void NativeEngine::updateScene(const FrameState &state) {
+    if (world_.buildings.empty()) return;
+    if (!sceneBuilder_.complete()) {
+        stepSceneBuild();
+        return;
+    }
+    const double cx = state.playerPosition[0];
+    const double cz = state.playerPosition[2];
+    // A quarter of the radius, so the slice is comfortably rebuilt before the
+    // player reaches its edge rather than at the moment they do.
+    const double chunk = std::max(32.0, streamRadius_ * 0.25);
+    const double qx = std::floor(cx / chunk);
+    const double qz = std::floor(cz / chunk);
+    if (qx == sceneChunkX_ && qz == sceneChunkZ_) return;
+    sceneChunkX_ = qx;
+    sceneChunkZ_ = qz;
+
+    SceneBuildOptions options;
+    options.centerX = cx;
+    options.centerZ = cz;
+    options.radius = streamRadius_;
+    options.detailLevel = detailLevel_;
+
+    // Start a build rather than running one. A slice is ~210k triangles and
+    // ~35 ms of assembly, which is a dropped frame at a chunk boundary and has
+    // been since the streamer was first wired up. The builder emits the same
+    // buildings in the same order across several frames, so the mesh is
+    // byte-identical to the one-shot build; only the timing changes.
+    {
+        const profile::Scope plan("scene.plan");
+        sceneBuilder_.begin(world_, sharedMaterialTable(), options);
+    }
+    // Keep the previous mesh on screen until the new one is ready, rather than
+    // swapping to an empty vertex buffer and rendering nothing.
+    stepSceneBuild();
+}
+
+void NativeEngine::stepSceneBuild() {
+    if (sceneBuilder_.complete()) return;
+    const profile::Scope build("scene.build");
+    const bool done = sceneBuilder_.step(sceneTriangleBudget_);
+    if (!done) return;
+    sceneMesh_ = sceneBuilder_.mesh();
+    sceneStats_ = sceneMesh_.stats;
+    // Kept after reset(), so the engine can report how the build was spread.
+    sceneBuildFrames_ = sceneBuilder_.stepCount();
+    sceneLargestStep_ = sceneBuilder_.largestStep();
+    sceneBuilder_.reset();
+    if (auto *vk = dynamic_cast<VulkanRenderBackend *>(renderer_)) {
+        std::string error;
+        if (!vk->setSceneMesh(sceneMesh_) && !error.empty()) {
+            std::cerr << "scene upload failed: " << error << "\n";
+        }
+    }
+}
+
 void NativeEngine::primeClock() {
     lastFrameNanos_ = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -92,7 +191,7 @@ bool NativeEngine::updateFrame() {
 
     const profile::Scope scope("frame.total");
     FrameState state;
-    if (!loop_.tick(delta, input_, state)) return false;
+    if (!tickOnce(delta, state)) return false;
     if (renderTargetOpen_) {
         renderer_->beginFrame();
         renderer_->drawFrame(state);
@@ -110,7 +209,7 @@ uint32_t NativeEngine::runHeadless(uint32_t frames, double delta) {
         uint32_t ran = 0;
         FrameState state;
         for (uint32_t i = 0; i < frames; ++i) {
-            if (!loop_.tick(delta, input_, state)) break;
+            if (!tickOnce(delta, state)) break;
             ++ran;
         }
         return ran;
@@ -118,7 +217,7 @@ uint32_t NativeEngine::runHeadless(uint32_t frames, double delta) {
     uint32_t ran = 0;
     FrameState state;
     for (uint32_t i = 0; i < frames; ++i) {
-        if (!loop_.tick(delta, input_, state)) break;
+        if (!tickOnce(delta, state)) break;
         renderer_->beginFrame();
         renderer_->drawFrame(state);
         renderer_->endFrame();
@@ -186,6 +285,11 @@ bool NativeEngine::enableVulkanRenderer() {
         return false;
     }
     auto renderer = std::make_unique<VulkanRenderBackend>();
+    // Forwarded here rather than set on the backend directly, because the
+    // backend does not exist until this function runs. Without it the packs are
+    // found only by working directory, which is how a missing bake turns into
+    // an untextured city with no message.
+    renderer->setSceneAssetDirectory(sceneAssetDirectory_);
     if (!renderer->initialize(vk_, VulkanInitOptions{})) {
         lastRenderError_ = renderer->stats().status;
         return false;

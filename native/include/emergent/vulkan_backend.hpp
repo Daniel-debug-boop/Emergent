@@ -1,11 +1,19 @@
 #pragma once
+#include "emergent/materials.hpp"
 #include "emergent/render_backend.hpp"
+#include "emergent/scene_mesh.hpp"
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace emergent {
+
+// The render graph's GPU object caches, declared here only so this header can
+// befriend them; the definitions live in render_graph_vulkan.hpp.
+class GraphResources;
+class GraphRenderPasses;
+
 struct VulkanCapabilities {
     bool loader = false;
     bool instance = false;
@@ -61,6 +69,12 @@ public:
     void destroyOffscreenSurface();
 private:
     friend class VulkanRenderBackend;
+    // The render graph's GPU object caches need the same device, allocator and
+    // command pool the renderer already uses, for the same reason it does: the
+    // allocator dies with the device, so an allocation made anywhere else
+    // would have to outlive its own owner.
+    friend class GraphResources;
+    friend class GraphRenderPasses;
     void* loader_ = nullptr;
     void* instance_ = nullptr;
     void* physical_device_ = nullptr;
@@ -143,8 +157,62 @@ public:
     // the default.
     void setCamera(float yawDegrees, float pitchDegrees, float distance);
 
+    // -- the scene, as opposed to the debug boxes ---------------------------
+    //
+    // The backend used to draw nothing but instanced cubes, because nothing
+    // connected the world generator to a vertex buffer. These two calls are that
+    // connection. The assembled mesh is uploaded once and drawn in one call
+    // with the material table the shader resolves each vertex's index through.
+
+    /**
+     * Hand the renderer the assembled world.
+     *
+     * The mesh is copied into a host-visible vertex buffer that grows but never
+     * shrinks, so calling this every frame with an unchanged mesh costs a
+     * memcpy and no allocation. Returns false with stats().status set on
+     * failure; it is not fatal, and the debug boxes keep drawing.
+     *
+     * The buffer is host-visible rather than staging-then-device-local on
+     * purpose. A world slice is rebuilt whenever the player crosses a chunk
+     * boundary, not every frame, and a device-local path would need a fence to
+     * know when the previous copy finished before overwriting the staging
+     // buffer. Host-coherent is the correct trade at this update rate; a
+     * per-frame streaming system would want the other one.
+     */
+    bool setSceneMesh(const SceneMesh &mesh);
+
+    /**
+     * Replace the material table.
+     *
+     * A table with more layers than the maps were allocated for is rejected
+     * rather than clamped: silently dropping the overflow turns a caller's
+     * mistake into a wrong-looking wall, and the shader has no way to notice.
+     */
+    bool setSceneMaterials(const MaterialTable &materials);
+
+    /** True once real material data, not the neutral placeholder, is bound. */
+    bool sceneMapsLoaded() const;
+
+    /**
+     * Where the packed KTX2 material maps live.
+     *
+     * Defaults to "build/native-assets", which is where
+     * `npm run assets:textures` writes them. Set before open(). A directory
+     * with no maps in it is not an error: the renderer falls back to neutral
+     * placeholders and says so in stats().materialMapNote, which is what makes
+     * "why is everything grey" a one-line answer rather than an investigation.
+     */
+    void setSceneAssetDirectory(const std::string &dir) { sceneAssetDirectory_ = dir; }
+    const std::string &sceneAssetDirectory() const { return sceneAssetDirectory_; }
+    /** Empty when the real maps are bound; otherwise why they are not. */
+    const std::string &materialMapNote() const;
+
+    /** How many triangles the last frame actually submitted through the scene. */
+    uint32_t sceneTriangles() const { return stats_.drawnTriangles; }
+
 private:
     struct Impl;
+    std::string sceneAssetDirectory_ = "build/native-assets";
     std::unique_ptr<Impl> impl_;
     VulkanBackend *device_ = nullptr;
     RenderFrameStats stats_{};

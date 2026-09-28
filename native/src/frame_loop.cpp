@@ -425,6 +425,21 @@ bool FrameLoop::playClip(std::string_view clip, bool loop) {
 
 void FrameLoop::resumeLocomotion() { impl_->locomotionLocked = false; }
 
+bool FrameLoop::setSpawn(double x, double z, double groundY) {
+    if (!impl_) return false;
+    Impl &s = *impl_;
+    s.spawn[0] = static_cast<float>(x);
+    s.spawn[1] = static_cast<float>(groundY);
+    s.spawn[2] = static_cast<float>(z);
+    // Move the character too, not just the point it will return to. Setting only
+    // the spawn leaves the player standing where they were, which reads as the
+    // call having had no effect until something calls reset().
+    if (s.player >= 0) {
+        return s.physics.setBodyPosition(s.player, s.spawn[0], s.spawn[1], s.spawn[2]);
+    }
+    return true;
+}
+
 void FrameLoop::reset() noexcept {
     Impl &s = *impl_;
     if (s.player >= 0) s.physics.setBodyPosition(s.player, s.spawn[0], s.spawn[1], s.spawn[2]);

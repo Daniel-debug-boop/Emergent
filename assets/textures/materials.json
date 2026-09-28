@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generated": "2026-09-27T03:36:16.425Z",
-  "size": 512,
+  "generated": "2026-09-27T05:20:38.418Z",
+  "size": 1024,
   "arrays": {
     "albedo": {
       "internalFormat": "SRGB8_ALPHA8",
@@ -355,8 +355,8 @@
   },
   "measured": {
     "materialCount": 26,
-    "textureSize": 512,
-    "bytesOnDisk": 18272844,
-    "estimatedVramBytes": 109051904
+    "textureSize": 1024,
+    "bytesOnDisk": 73402653,
+    "estimatedVramBytes": 436207616
   }
 }

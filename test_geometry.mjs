@@ -153,8 +153,8 @@ test('tiling scales are physically sensible', () => {
 // ---------------------------------------------------------------------------
 
 test('the vertex layout is 10 floats of 40 bytes', () => {
-  assertEqual(VERTEX_FLOATS, 10, 'position(3) normal(3) colour(3) material(1)');
-  assertEqual(VERTEX_BYTES, 40, 'and packs into 40 bytes');
+  assertEqual(VERTEX_FLOATS, 12, 'position(3) normal(3) colour(3) material(1) uv(2)');
+  assertEqual(VERTEX_BYTES, 48, 'and packs into 48 bytes');
 });
 
 test('every emitter writes whole, finite, in-range vertices', () => {

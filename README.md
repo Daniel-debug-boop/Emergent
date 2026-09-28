@@ -334,6 +334,10 @@ The native engine is upstream-only for infrastructure that has a mature open-sou
 | Asset packs | Zstandard | `v1.5.7` | **450 symbols in the linked binary.** Packs are written, read and integrity-checked on every self-test run. **83 behaviour checks pass**, including corruption, truncation and header attacks |
 | Profiling | Tracy (opt-in) + built-in zone accounting | `v0.13.0` | Zone accounting always on and verified; Tracy compiles in with `-DEMERGENT_ENABLE_TRACY=ON`. **48 behaviour checks pass** |
 | Frame loop | Jolt + ozz, behind `FrameLoop` | — | **125 behaviour checks pass.** Fixed 1/60s physics, variable-rate presentation, interpolated render state. Frame-rate independence and bit-exact determinism both asserted |
+| World generation | in-tree, ported from `world.mjs` | — | **4,699 parity checks pass.** Same seed, same city: 3,077 buildings, 672 roads, 50 districts, positions agreeing to 1 µm. Proven against a committed fixture generated from the JavaScript, and CI fails if the fixture goes stale |
+| Materials | in-tree, ported from `materials.mjs` | — | **142 checks pass, no GPU.** 26 baked + 17 solid in one index space; painted steel is a dielectric, bare steel is a metal; every uniform finite and in range |
+| Geometry | in-tree, ported from `geometry.mjs`/`city.mjs` | — | Same suite. Every normal unit-length, every material index resolvable, proportions checked against a 1.8 m person. A dressed facade is 3,588 vertices from a 36-vertex box |
+| Scene shader | GLSL 450, GGX + Smith | — | The same model as the browser's PBR shader. **Parsed, not compiled** — there is no `glslc` here, and the Vulkan path below has never run |
 | Renderer | Vulkan 1.3 via Volk + VMA | `vulkan-sdk-1.4.328.0` | **Compiled and linked only — never executed.** No ICD and no `/dev/dri` here. Headless backend's frame-state validation is tested; the GPU path is not |
 | Mesh optimisation | meshoptimizer | `v1.2` | Compiled, **runs at runtime** (`BOUNDARY_READY`) |
 | Entity-component world | Flecs | `v4.0.5` | Compiled, **runs at runtime** (`ACTIVE`, entities created and updated) |

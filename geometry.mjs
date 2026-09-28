@@ -33,8 +33,19 @@
  * check.
  */
 
-/** Floats per vertex. Mirrored by the renderer's vertexAttribPointer stride. */
-export const VERTEX_FLOATS = 10;
+/**
+ * Floats per vertex. Mirrored by the renderer's vertexAttribPointer stride.
+ *
+ * position(3) normal(3) colour(3) material(1) uv(2).
+ *
+ * The UV pair is present because imported models need real texture coordinates
+ * and box mapping cannot supply them. It is the last two floats rather than a
+ * fifth attribute so the stride stays one contiguous read, and every procedural
+ * emitter in this kit writes zeros — a box-projected surface derives its
+ * coordinate in the shader from the normal, and `MAP_MODE.UV` is what tells the
+ * shader to use this attribute instead.
+ */
+export const VERTEX_FLOATS = 12;
 export const VERTEX_BYTES = VERTEX_FLOATS * 4;
 
 /**
@@ -63,11 +74,20 @@ export function createGeometryKit(materials) {
    * while this kit was written, and the only reason it was caught quickly is
    * that it threw here first.
    */
-  const v = (arr, p, n, c, m) => {
+  const v = (arr, p, n, c, m, uv) => {
     if (c === undefined || m === undefined) {
       throw new Error('geometry: a vertex was emitted without a colour or a material\n' + new Error().stack);
     }
-    arr.push(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2], m);
+    arr.push(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2], m,
+      uv === undefined ? 0 : uv[0], uv === undefined ? 0 : uv[1]);
+  };
+
+  /** A vertex carrying real texture coordinates, for imported geometry only. */
+  const vu = (arr, p, n, c, m, u, w) => {
+    if (!Number.isFinite(u) || !Number.isFinite(w)) {
+      throw new Error(`geometry: a UV-mapped vertex was emitted with a non-finite coordinate (${u}, ${w})`);
+    }
+    v(arr, p, n, c, m, [u, w]);
   };
 
   const quad = (arr, a, b, c, d, n, col, m) => {
@@ -79,6 +99,13 @@ export function createGeometryKit(materials) {
   const quadShaded = (arr, a, b, c, d, n, ca, cb, cc, cd, m) => {
     v(arr, a, n, ca, m); v(arr, b, n, cb, m); v(arr, c, n, cc, m);
     v(arr, a, n, ca, m); v(arr, c, n, cc, m); v(arr, d, n, cd, m);
+  };
+
+  /** A UV-mapped triangle, for imported geometry. */
+  const triUV = (arr, a, b, c, n, col, m, ua, ub, uc) => {
+    vu(arr, a, n, col, m, ua[0], ua[1]);
+    vu(arr, b, n, col, m, ub[0], ub[1]);
+    vu(arr, c, n, col, m, uc[0], uc[1]);
   };
 
   /**
@@ -663,7 +690,7 @@ export function createGeometryKit(materials) {
   };
 
   return {
-    M, v, quad, quadShaded, box, taper, cylinder, cone, blob, plane, panel,
+    M, v, vu, quad, quadShaded, triUV, box, taper, cylinder, cone, blob, plane, panel,
     window, door, band, parapet, gableRoof, railing, balcony, stairs,
     acUnit, vent, chimney, roofTank, pipeRun, fireEscape,
     signBoard, bladeSign, shutter,

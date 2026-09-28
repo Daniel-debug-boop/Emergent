@@ -36,3 +36,23 @@ node_modules/
 # Recreate with `npm run assets:fetch`.
 assets/source/
 assets/.cache/
+
+# The baked model set: 28 MB of base64 vertex data emitted by
+# `npm run assets:models`. The curated list in assets/models.mjs and the
+# importer that produces this are both committed; the payload is an artefact,
+# like the texture tiles' source. Note this differs from assets/textures, which
+# *is* committed because the game imports it directly. If the model set is ever
+# loaded rather than imported, this line has to go.
+assets/models.gen.mjs
+
+# The build stages here and swaps into dist/ only on success, so a failed build
+# cannot destroy a working artifact. Transient, but a killed build can leave one.
+.dist-staging/
+.dist-previous/
+
+# `npm run assets:textures`. The 26 baked CC0 materials as the native material
+# table, and the three packed KTX2 maps under build/. The source PNGs in
+# assets/textures are committed, exactly as for the models; this is the
+# generated half. The CMake build regenerates it when node is available, and
+# emergent_materials falls back to the untextured table when it is not.
+assets/materials.gen.hpp

@@ -257,6 +257,23 @@ public:
      */
     void reset() noexcept;
 
+    /**
+     * Move the spawn point, and put the character there.
+     *
+     * Exists because the spawn was hard-coded to the origin, and the generated
+     * world is not centred on the origin: for a typical seed the built-up part
+     * is a kilometre or more away. A player who starts in an empty field has to
+     * walk to the city before seeing any of it, and a streaming slice built
+     * around the origin streams nothing at all.
+     *
+     * `y` is ignored and the ground height under the spawn is used, because a
+     * fixed height puts the player inside a hill on any terrain that is not
+     * flat, and the physics resolve is not a substitute for spawning correctly.
+     * Safe to call before or after initialize(); before, it is applied at
+     * initialize, after, it moves the character immediately.
+     */
+    bool setSpawn(double x, double z, double groundY);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -84,10 +84,12 @@ from, which is where the real cost is: a hero material sampled at 2k and
 box-filtered down to 512 keeps far more micro-detail than one upsampled from 1k,
 and only four materials in the set are seen from a metre away.
 
-## Why RGBA8 and not KTX2 / Basis Universal
+## Why the *web* runtime is RGBA8, and the native one is KTX2
 
-This is the one place the pipeline does not do what a modern asset pipeline
-usually does, so here is the reasoning rather than a silent gap.
+Two runtimes, two honest answers, and the reason they differ is a capability
+rather than a preference.
+
+### The web runtime: RGBA8
 
 A browser cannot upload BCn or ASTC without either a `compressedTexImage2D`
 extension for that exact format or a WASM transcoder, and WebGL2 guarantees
@@ -96,8 +98,15 @@ in this build environment and cannot be installed from it. Shipping a ~500 KB
 Basis transcoder into the game's first frame to save download bytes that a
 512-px PNG does not cost is the wrong trade for a web target.
 
-So the runtime is RGBA8 with GPU-generated mip chains. The moment a build host
-with `toktx` exists, this is a one-line change to the encoder in
+A browser cannot upload BCn or ASTC without either a `compressedTexImage2D`
+extension for that exact format or a WASM transcoder, and WebGL2 guarantees
+neither. Encoding BCn offline needs KTX-Software's `toktx`, which is not present
+in this build environment and cannot be installed from it. Shipping a ~500 KB
+Basis transcoder into the game's first frame to save download bytes that a
+512-px PNG does not cost is the wrong trade for a web target.
+
+So the web runtime is RGBA8 with GPU-generated mip chains. The moment a build
+host with `toktx` exists, this is a one-line change to the encoder in
 `tools/assets/bake.mjs`, not a redesign: the validation, the atlas packing, the
 layer assignment and the loader all work in terms of "one 512×512 RGBA tile per
 layer" and do not care how those bytes are encoded.
@@ -106,6 +115,58 @@ The cost of the decision, measured: 17.4 MB of download and 104 MB of VRAM.
 The cost of the alternative, estimated: a 500 KB transcoder plus whatever the
 compressed textures save, which at this size is likely a few megabytes. A reader
 who disagrees with the trade can make it in one place.
+
+### The native runtime: KTX2
+
+Vulkan has neither restriction, and the native renderer is the product now, so
+it reads real KTX2. The three material maps are packed into three
+zstd-supercompressed KTX2 files, one 26-layer `sampler2DArray` each, with a full
+mip chain baked in rather than generated at upload.
+
+`tools/assets/ktx2.mjs` writes the container. It was written from the KTX2
+specification rather than from a reference encoder, because no KTX tooling is
+available in this environment and installing one is not possible from it. That
+is a real limitation, and it is why the file is a **zstd-supercompressed RGBA8**
+KTX2 rather than a GPU-compressed one: zstd is a compression scheme layered on
+top of an uncompressed payload, so every byte of every texel is still recoverable
+and verifiable here, whereas BC6H output could not be decoded or checked at all
+without a BCn decoder. The correctness of the compression is therefore proven
+in CI; the *interoperability* of the container with `libktx` and `toktx` is
+**not**. The one command that settles it, on a machine with the SDK, is
+`toktx --validate build/native-assets/albedo.ktx2`.
+
+The measured trade: 47.5 MB on disk, 416 MB of VRAM with complete mip chains.
+zstd shrinks the download and leaves VRAM untouched, because decompression
+happens on the CPU and the GPU still receives RGBA8.
+
+`native/src/ktx2.cpp` reads it back, with no KTX dependency: it parses the
+header, the level index, the data format descriptor and the key/value block
+itself, and uses the vendored `libzstd` for the payload. It accepts only
+supercompression scheme 2 (zstd) and uncompressed data, and reports anything
+else by name rather than guessing.
+
+| What | Where | How it is verified |
+|---|---|---|
+| PNG decode, all five scanline filters | `tools/assets/png.mjs` | `test_asset_pack.mjs` (94 checks) round-trips each filter against an independently written encoder |
+| KTX2 writer and DFD layout | `tools/assets/ktx2.mjs` | `test_asset_pack.mjs` checks the header, the 92-byte DFD, the KVD and the level index |
+| KTX2 reader, byte-exact | `native/src/ktx2.cpp` | `native/tests/ktx2_test.cpp` decodes a committed fixture and compares every texel |
+| Corruption detection | both | single-byte corruption anywhere in the file, including inside the zstd frame, is rejected |
+| The real 50 MB pack | packer | `ktx2_test` decodes all three arrays in CI and validates layer count, dimensions and mip count |
+
+Two findings from building it are worth keeping, because both are the kind of
+thing that looks fine until it does not:
+
+- **zstd's content checksum is optional, and Node does not enable it by
+  default.** A packer that omits it produces files in which corruption *inside*
+  the compressed frame is silently accepted — decoded as plausible-looking
+  garbage. The writer now sets `ZSTD_c_checksumFlag`, which is what makes those
+  4 bytes exist and the corruption detectable.
+- **`-1` is a sentinel, not a value.** `metallic: -1` in the material manifest
+  means "read metalness from the ARM map's blue channel", and the web shaders
+  branch on it. The native shader reads metalness from the texture for every
+  textured material regardless, so the sentinel is inert there — but it is not
+  a roughness of -1, and a packer that treated it as one would produce a
+  surface with no reflection at all.
 
 ## Validation, and what each check is for
 
@@ -239,12 +300,30 @@ looks. `test_headless_game.mjs` asserts all of the former; the latter is marked
 
 ```bash
 npm run assets:fetch     # re-download the 80 MB of sources, md5-verified
-npm run assets:bake      # validate, resample and pack the runtime set
-npm run assets:audit     # licence, provenance and shipped-file audit
+npm run assets:bake      # validate, resample and pack the web runtime set
+npm run assets:textures  # pack the native KTX2 arrays + the material table
+npm run assets:fixture   # regenerate the committed KTX2 test fixture
+npm run assets:audit     # licence, provenance, shipped-file and native-pack audit
 npm run assets:probe -- sandstone_blocks_05   # measure a candidate
 ```
 
-`assets:fetch` needs network access. `assets:bake` and `assets:audit` do not.
+`assets:fetch` needs network access. The rest do not.
+
+`assets:textures` also runs as part of the CMake build, so a clean configure
+produces the packs and the material table without being asked. The generated
+header is gitignored; the source PNGs in `assets/textures` are committed, as for
+the models. When node is unavailable the native build falls back to the
+untextured table, which compiles clean and reports itself as untextured rather
+than pretending.
+
+The native binary finds the packs through `--assets DIR`, defaulting to
+`build/native-assets` relative to the working directory. It prints the resolved
+path and whether the maps are the real bake or neutral placeholders, so a
+missing pack reads as a missing pack:
+
+```bash
+./build/release/emergent_native --render 1280x720 --assets build/native-assets
+```
 
 ## FINAL HARDWARE VALIDATION REQUIRED
 

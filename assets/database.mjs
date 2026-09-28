@@ -217,27 +217,45 @@ export const MATERIAL_BY_ID = new Map(MATERIALS.map(m => [m.id, m]));
 /**
  * Source download resolution, by tier.
  *
- * The *runtime* texture is a single 512x512 array for every material — see
+ * The *runtime* texture is a single array for every material — see
  * `TEXTURE_SIZE` — so the tier does not control the shipped resolution. It
  * controls the resolution EMERGENT downloads and bakes *from*, which is where
- * the real cost is: a hero material sampled at 2k and box-filtered down to 512
- * keeps far more micro-detail than one upsampled from 1k, and it is only four
- * materials that are seen from a metre away.
+ * the real quality is: a material sampled at 8k and box-filtered down keeps
+ * far more micro-detail than one upsampled from 1k, and it is only a handful of
+ * materials that are ever seen from a metre away.
+ *
+ * 8k is what the provider publishes for nearly every material here, so these
+ * are the top of the available range rather than an arbitrary choice. The cost
+ * is download time and a few hundred megabytes of gitignored source, both of
+ * which are paid once at `npm run assets:fetch` and never again.
  */
-export const TIER_SOURCE_RESOLUTION = { hero: '2k', standard: '1k', minor: '1k' };
+export const TIER_SOURCE_RESOLUTION = { hero: '8k', standard: '4k', minor: '2k' };
 
 /**
  * Runtime texture size, for every layer of every array.
  *
  * A `TEXTURE_2D_ARRAY` requires all its layers to be the same size, so a
  * per-material runtime resolution is not available without a separate array and
- * a second set of samplers per map. 512 is the point where the road under the
- * player's feet holds up at a 5 m tile while the whole 26-material set still
- * fits a memory budget a browser can be asked to hold. Detail that genuinely
- * needs more than 512 is bought with tiling density, which is what `scale` is
- * for, not with more bytes per texel.
+ * a second set of samplers per map.
+ *
+ * 1024, chosen by measurement rather than by wanting a bigger number. Three
+ * maps times 26 layers:
+ *
+ *     512 px ->  105 MB VRAM   1/8 the texels of a 1080p screen at 3 m
+ *    1024 px ->  418 MB VRAM   about half a screen at 3 m
+ *    2048 px -> 1672 MB VRAM   4x the texels of a 1080p screen at 3 m
+ *
+ * 2048 and above spend gigabytes on detail that no viewpoint in this game
+ * resolves: at 3 m a 1024 tile is already about half the screen, and at 10 m it
+ * is a twentieth of it. 1024 is the last size where adding a texel changes
+ * something a player can see, and it quadruples the detail of the previous
+ * 512 bake on the surfaces that are seen from a metre away.
+ *
+ * Detail beyond that is bought with tiling density -- `scale` in each material's
+ * entry -- rather than with more bytes per texel, which is free where this is
+ * not.
  */
-export const TEXTURE_SIZE = 512;
+export const TEXTURE_SIZE = 1024;
 
 /** Internal format for each array, and whether it is decoded as sRGB. */
 export const TEXTURE_ARRAYS = [

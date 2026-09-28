@@ -45,6 +45,23 @@ jobs:
       - name: Test
         run: npm test
 
+      # The native renderer is no longer a debug presentation layer over a
+      # scene of boxes: it generates the same city the JavaScript does, from the
+      # same seed, and the parity test is what makes that checkable. It needs the
+      # fixture, which is generated from world.mjs and committed, so this is a
+      # guard that the committed fixture still matches the generator it claims
+      # to describe -- if world.mjs moves, the fixture is stale and the parity
+      # test is asserting against a city that no longer exists.
+      - name: Verify the world parity fixture is current
+        run: |
+          node tools/gen_world_fixture.mjs
+          if ! git diff --quiet -- native/tests/world_fixture.txt; then
+            echo "::error::world_fixture.txt is stale. Run 'npm run test:fixture' and commit it."
+            git diff --stat -- native/tests/world_fixture.txt
+            exit 1
+          fi
+          echo "world fixture matches world.mjs" 
+
       # Every third-party asset in the game is named in a manifest with its
       # licence, its source URL and its author. This fails the build if any of
       # them stops being CC0, loses its provenance, or stops matching what

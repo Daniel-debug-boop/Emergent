@@ -3,6 +3,7 @@ import { matrixPerspective, lookAt, mul, transformPoint } from './math3d.mjs';
 import { extractFrustumPlanes, aabbVisible } from './culling.mjs';
 import { MATERIAL_DESCRIPTOR } from './assets/textures/materials.mjs';
 import { buildMaterialTable, MAX_MATERIALS } from './materials.mjs';
+import { createBudget, observe as budgetObserve, retarget as budgetRetarget, baseDetailRadius, staticDetailFor, describe as describeBudget } from './budget.mjs';
 import { createMaterialTextures, bindMaterialTextures as bindTextures, mipLevels, UNITS } from './textures.mjs';
 import { createGeometryKit, VERTEX_FLOATS, VERTEX_BYTES } from './geometry.mjs';
 import { buildBuilding, buildRoad, buildTree, buildBush, dressStreet, dressBuilding, buildCrossing, buildCar, buildCarProxy, buildCharacter, buildCharacterProxy } from './city.mjs';
@@ -410,29 +411,35 @@ const MAT_UNIFORMS = MAX_MATERIALS;
 
 const sceneVS = `#version 300 es
 precision highp float;
-layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c; layout(location=3) in float m;
+layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec3 c; layout(location=3) in float m; layout(location=4) in vec2 uv;
 uniform mat4 uPV; uniform vec3 uCam; uniform float uTime; uniform float uWater;
 uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
-out vec3 vN; out vec3 vC; out float vD; out vec3 vP; out vec2 vUV; out float vMat; out float vT;
+out vec3 vN; out vec3 vC; out float vD; out vec3 vP; out vec2 vUV; out float vMat; out float vT; out float vUseUV;
 void main(){
   vec3 q=p; if(uWater>0.5) q.y += sin(q.x*0.025+uTime*1.6)*0.08 + cos(q.z*0.021+uTime)*0.06;
   gl_Position=uPV*vec4(q,1.0);
   vN=n; vC=c; vD=distance(q,uCam); vP=q; vMat=m;
   int mi=int(m+0.5);
+  float mode=uMatB[mi].x;
   // Box mapping. The plane comes from the material's recorded role rather than
   // from the normal, so a road tiles as ground and a facade tiles as a wall
   // even where a chamfer or a pitched roof made the normal ambiguous. World
   // locked, so a brick wall's bricks stay put while the player walks past.
-  float mode=uMatB[mi].x;
-  vec2 uv = p.xz;
-  if(mode>0.5 && mode<1.5) uv=p.zy; else if(mode>1.5 && mode<2.5) uv=p.xy;
-  vUV=uv*uMatA[mi].y;
+  //
+  // MAP_MODE.UV is the exception: an imported mesh brings its own coordinates
+  // because no world-axis projection can put a wood grain along a tapered leg.
+  // The flag is interpolated so the branch happens once per vertex, not once
+  // per fragment.
+  vUseUV=step(3.5,mode);
+  vec2 proj = p.xz;
+  if(mode>0.5 && mode<1.5) proj=p.zy; else if(mode>1.5 && mode<2.5) proj=p.xy;
+  vUV=mix(proj*uMatA[mi].y, uv, vUseUV);
   vT=uMatB[mi].w;
 }`;
 
 const sceneFS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec3 vC; in float vD; in vec3 vP; in vec2 vUV; in float vMat; in float vT;
+in vec3 vN; in vec3 vC; in float vD; in vec3 vP; in vec2 vUV; in float vMat; in float vT; in float vUseUV;
 uniform vec3 uSun; uniform vec3 uFog; uniform vec3 uAmbient; uniform float uFogDensity; uniform float uNight; uniform float uWater;
 uniform vec3 uSunColor; uniform vec3 uSkyColor; uniform vec3 uGroundColor;
 uniform vec4 uMatA[${MAT_UNIFORMS}]; uniform vec4 uMatB[${MAT_UNIFORMS}];
@@ -458,12 +465,25 @@ void main(){
     vec4 alb=texture(uAlbedoTex,vec3(vUV,float(layer)));
     vec4 arm=texture(uArmTex,vec3(vUV,float(layer)));
     vec3 nt=texture(uNormalTex,vec3(vUV,float(layer))).xyz*2.0-1.0;
-    // A tangent frame derived from the projection the UV came from. There are
-    // no tangents in the vertex format because every textured surface here is a
-    // box-projected plane, so the tangent is one world axis and costs nothing.
-    vec3 up=abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0);
-    vec3 T=normalize(cross(up,N));
-    vec3 Bt=cross(N,T);
+    vec3 T,Bt;
+    if(vUseUV>0.5){
+      // Screen-space derivatives of position and UV give the tangent frame for
+      // an arbitrary mesh without storing tangents, which is the standard
+      // technique and costs two derivatives instead of four floats a vertex.
+      // Degenerate when a triangle is edge-on or has a mirrored UV island, so it
+      // falls back to an arbitrary perpendicular rather than a NaN.
+      vec3 dp1=dFdx(vP), dp2=dFdy(vP);
+      vec2 du1=dFdx(vUV), du2=dFdy(vUV);
+      float det=du1.x*du2.y-du1.y*du2.x;
+      vec3 Tt=abs(det)>1e-12?(dp1*du2.y-dp2*du1.y)/det:vec3(0.0);
+      T=normalize(Tt-N*dot(N,Tt));
+      if(dot(T,T)<0.5) T=normalize(cross(abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0),N));
+    } else {
+      // A box-projected surface's tangent is one world axis, derived from the
+      // same plane the coordinate came from. No tangents in the vertex format.
+      T=normalize(cross(abs(N.y)>0.7?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0),N));
+    }
+    Bt=cross(N,T);
     nt.xy*=B.y;
     albedo*=alb.rgb;
     ao=arm.r; rough=clamp(arm.g,0.04,1.0); metal=arm.b;
@@ -537,6 +557,7 @@ function setAttributePointers(){
   gl.vertexAttribPointer(1,3,gl.FLOAT,false,VERTEX_BYTES,12);
   gl.vertexAttribPointer(2,3,gl.FLOAT,false,VERTEX_BYTES,24);
   gl.vertexAttribPointer(3,1,gl.FLOAT,false,VERTEX_BYTES,36);
+  gl.vertexAttribPointer(4,2,gl.FLOAT,false,VERTEX_BYTES,40);
 }
 gl.bindVertexArray(vao);
 gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
@@ -544,6 +565,7 @@ gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,STRIDE,
 gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,STRIDE,12);
 gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,3,gl.FLOAT,false,STRIDE,24);
 gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3,1,gl.FLOAT,false,STRIDE,36);
+gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4,2,gl.FLOAT,false,STRIDE,40);
 gl.bindVertexArray(null);
 
 // Matrix math (perspective, look-at, multiply, point transform) lives in
@@ -656,6 +678,11 @@ function flattenCells(cells) {
 }
 
 let staticBuildMs=0, dynamicBuildMs=0, staticBytes=0;
+// The vertex budget controller. Created here rather than per build, so the
+// fitted radius survives across streaming steps — a controller that forgot its
+// state every frame would never see two builds at different radii and so could
+// never measure the cost curve it depends on.
+const vertexBudget = createBudget(qualityLevel, rendererMode === 1);
 
 function buildStaticScene() {
   if (!world || !player) return;
@@ -664,19 +691,26 @@ function buildStaticScene() {
   const shadowBuilder = makeChunkBuilder();
   const radius = qualityLevel===0?680:qualityLevel===1?800:qualityLevel===2?980:1160;
   const adaptive = rendererMode===1;
-  const staticDetail=adaptive?0.55+qualityLevel*0.12:0.82+qualityLevel*0.06;
-  // The distance over which detail is spent, as a fraction of what is actually
-  // streamed.
+  const staticDetail = staticDetailFor(qualityLevel, adaptive);
+  // How far detail is spent, and why it is a measured number rather than a
+  // constant.
   //
   // Streaming radius and detail radius are different things and conflating them
   // is what makes procedural cities either empty at 300 m or unaffordable. The
   // stream exists so the world continues past the horizon; the detail radius
   // exists so that a building the player can actually read has its windows, its
   // cornice and its roof plant, and one 800 m away is a correctly materialled
-  // mass with the right silhouette. The exponent front-loads the falloff, which
-  // puts the budget where a player is looking instead of spreading it evenly
-  // over ground they will never walk on.
-  const detailRadius=(260+qualityLevel*180)*(adaptive?0.6:1);
+  // mass with the right silhouette.
+  //
+  // It used to be the fixed expression `(260 + qualityLevel*180) * ...`, which
+  // is a guess about how many vertices a radius costs. It is right for one world
+  // at one density and wrong everywhere else: a district three times denser
+  // spends three times the geometry at identical settings and nothing notices.
+  // A radius is also the wrong control variable — submitted vertices depend on
+  // where the camera looks, and a radius spends the same budget facing a wall as
+  // facing a skyline. So the radius is now fitted to a vertex target by
+  // `budget.mjs`, which measures each build and corrects.
+  const detailRadius = vertexBudget.detailRadius;
   terrainChunk(builder,player.x,player.z,radius,staticDetail);
   const activeChunks = refreshStreamResidency(radius);
   syncBuildingColliders(activeChunks);
@@ -733,8 +767,20 @@ function buildStaticScene() {
   gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuf);gl.bufferData(gl.ARRAY_BUFFER,shadowData.vertices,gl.STATIC_DRAW);shadowVertexCount=shadowData.vertices.length/VERTEX_FLOATS;
   staticBytes=staticData.vertices.byteLength;
   streamOps++; streamGenerated=streamResidency.generated; streamFreed=streamResidency.evicted;
-  streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}`;
+  // The detail radius is part of the key. Without it the budget controller
+  // adjusts the radius and nothing rebuilds, so the loop is open: the game
+  // measures a cost, corrects, and the correction is never applied. It is the
+  // kind of omission that makes a control system look inert rather than broken,
+  // because every measurement is plausible and nothing ever changes.
+  //
+  // Quantised to 4 m because the controller dead-bands at 6% and sub-metre
+  // wobble must not trigger a full scene rebuild.
+  streamKey=`${keyCell(player.x,player.z)}|${radius}|${qualityLevel}|${rendererMode}|${Math.round(detailRadius/4)}`;
   if($('loading')) $('loading').style.display='none';
+  // Close the feedback loop: hand the measured cost back to the controller so
+  // the *next* build spends a radius that fits the budget. This is the only
+  // line that makes the budget a control loop rather than a constant.
+  budgetObserve(vertexBudget, staticVertexCount);
   staticBuildMs=performance.now()-t0;
   return staticBuildMs;
 }
@@ -1472,8 +1518,12 @@ function frame(now){
 
 function resize(){canvas.width=Math.floor(innerWidth*Math.min(devicePixelRatio||1,1.5));canvas.height=Math.floor(innerHeight*Math.min(devicePixelRatio||1,1.5));canvas.style.width='100%';canvas.style.height='100%';}
 
-function cycleRenderer(){rendererMode=rendererMode?0:1;streamKey='';showToast(`Renderer: ${MODES[rendererMode]}.`);}
-function cycleQuality(){qualityLevel=(qualityLevel+1)%QUALITY.length;streamKey='';showToast(`Quality: ${QUALITY[qualityLevel]}.`);}
+// Changing quality or renderer mode changes the target, so the fitted scale is
+// discarded rather than carried over. Keeping it would ask the next scene to
+// spend a radius calibrated for a budget that is no longer in play, which is how
+// a controller ends up convinced the world is ten times denser than it is.
+function cycleRenderer(){rendererMode=rendererMode?0:1;budgetRetarget(vertexBudget,qualityLevel,rendererMode===1);streamKey='';showToast(`Renderer: ${MODES[rendererMode]}.`);}
+function cycleQuality(){qualityLevel=(qualityLevel+1)%QUALITY.length;budgetRetarget(vertexBudget,qualityLevel,rendererMode===1);streamKey='';showToast(`Quality: ${QUALITY[qualityLevel]}.`);}
 
 function bindTouch(){
   const stick=$('stick'), knob=$('knob');let active=false,startX=0,startY=0;
@@ -1520,6 +1570,17 @@ globalThis.EMERGENT = {
       recomputed, reused, visibleObjects, simulatedNpcCount, streamOps,
       streamGenerated, streamFreed, residentChunks: streamResidency.active.size,
       staticBuildMs, dynamicBuildMs, staticBytes, materialLayers: MATERIALS.count,
+      // The measured budget, so a test can assert the control loop closed
+      // rather than that a constant happened to be right.
+      budget: {
+        target: vertexBudget.target, actual: vertexBudget.lastActual,
+        percent: vertexBudget.target ? Math.round(vertexBudget.lastActual / vertexBudget.target * 100) : 0,
+        detailRadius: Math.round(vertexBudget.detailRadius),
+        scale: +vertexBudget.scale.toFixed(3),
+        exponent: +vertexBudget.exponent.toFixed(2),
+        corrections: vertexBudget.corrections,
+        summary: describeBudget(vertexBudget)
+      },
       lastViewProjection: lastPV
     };
   },

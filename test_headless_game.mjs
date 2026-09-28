@@ -13,6 +13,7 @@ import {
   setupHeadless, resetHarness, fireGlobal, pumpFrames, currentGL, overlayCtxOf
 } from './tools/headless_runtime.mjs';
 import { beginRebind, isCapturing } from './input.mjs';
+import { VERTEX_FLOATS } from './geometry.mjs';
 
 // ---------------------------------------------------------------------------
 // Minimal test runner (no dependencies; the project ships no test framework)
@@ -453,10 +454,20 @@ await test('the material set is uploaded as three complete texture arrays', asyn
   const report = gl.textureReport();
   const arrays = report.filter(t => t.layers > 1);
   assertEqual(arrays.length, 3, 'the game uploads three texture arrays, one per map');
+  // Read the expected size and layer count from the descriptor the game itself
+  // imports, not from a literal. Hard-coding 512 here meant raising
+  // TEXTURE_SIZE to 1024 failed here with "decoded 512x512, the descriptor says
+  // 1024x1024" on all 78 tiles -- a test that had become a copy of the old
+  // constant rather than a check on the new one. Both numbers now come from
+  // the same place the runtime reads them.
+  const { MATERIAL_DESCRIPTOR } = await import('./assets/textures/materials.mjs');
   for (const t of arrays) {
-    assertEqual(t.width, 512, `array is 512 wide (${t.width})`);
-    assertEqual(t.height, 512, `array is 512 tall (${t.height})`);
-    assertEqual(t.layers, 26, `array has one layer per material (${t.layers})`);
+    assertEqual(t.width, MATERIAL_DESCRIPTOR.size,
+      `array is ${MATERIAL_DESCRIPTOR.size} wide (${t.width})`);
+    assertEqual(t.height, MATERIAL_DESCRIPTOR.size,
+      `array is ${MATERIAL_DESCRIPTOR.size} tall (${t.height})`);
+    assertEqual(t.layers, MATERIAL_DESCRIPTOR.arrays.albedo.layers,
+      `array has one layer per material (${t.layers})`);
     assert(t.levels > 1, `array has a mip chain (${t.levels} levels)`);
     assertEqual(t.mips, true, 'and the mip chain was actually generated');
     assertEqual(t.minFilter, gl.LINEAR_MIPMAP_LINEAR, 'and is minified trilinearly');
@@ -491,7 +502,12 @@ await test('geometry carries material indices the shader can resolve', async () 
 
   // Reach the static vertex buffer through the harness's own attribute state,
   // which is what the renderer is actually drawing from.
-  const STRIDE = 10;
+  // Derived from the module, not hard-coded. This test once carried its own
+  // copy of the vertex stride, so widening the format silently made it read
+  // garbage and it reported a nonsense vertex count instead of the real one.
+  // A duplicated constant is a second source of truth, and the only way to
+  // find it is to change the thing it copies.
+  const STRIDE = VERTEX_FLOATS;
   // Read the largest uploaded buffer rather than the one a VAO currently
   // points at: the renderer rebinds the dynamic buffer every frame, so the
   // VAO's attribute state is whichever scene was drawn last and the static one

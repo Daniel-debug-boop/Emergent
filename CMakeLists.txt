@@ -345,7 +345,16 @@ endif()
 add_library(emergent_frame_loop STATIC
   native/src/frame_loop.cpp)
 target_include_directories(emergent_frame_loop PUBLIC native/include)
-target_link_libraries(emergent_frame_loop PUBLIC emergent_physics emergent_animation emergent_profiling)
+# emergent_animation is conditional on an ozz tree being supplied, so it cannot
+# be named here unconditionally. Naming it anyway makes the link fail with a
+# bare `-lemergent_animation: No such file` in any configuration without ozz --
+# which is exactly the configuration whose whole purpose is to build the parts
+# that do not need a third-party tree. The frame loop degrades to physics and
+# profiling rather than failing to link.
+target_link_libraries(emergent_frame_loop PUBLIC emergent_physics emergent_profiling)
+if(TARGET emergent_animation)
+  target_link_libraries(emergent_frame_loop PUBLIC emergent_animation)
+endif()
 set_target_properties(emergent_frame_loop PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(UNIX)
   target_compile_options(emergent_frame_loop PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
@@ -369,6 +378,285 @@ if(UNIX)
   target_compile_options(emergent_frame_loop_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME emergent_frame_loop COMMAND emergent_frame_loop_test)
+
+# ---------------------------------------------------------------------------
+# The world, generated in C++
+# ---------------------------------------------------------------------------
+# The native renderer is no longer a debug presentation layer over a scene of
+# boxes: it generates and draws the same city the JavaScript reference does,
+# from the same seed, with the same integer draws. `world_gen.cpp` is a port of
+# `world.mjs` and the parity test below is what makes that claim checkable
+# rather than aspirational -- it compares the C++ against a fixture generated
+# from the JavaScript, so a divergence in the hash functions shows up as a moved
+# building rather than as a subtly different skyline nobody mentions.
+add_library(emergent_world STATIC native/src/world_gen.cpp)
+target_include_directories(emergent_world PUBLIC native/include)
+set_target_properties(emergent_world PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_world PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_world_parity_test native/tests/world_parity_test.cpp)
+target_link_libraries(emergent_world_parity_test PRIVATE emergent_world)
+if(UNIX)
+  target_compile_options(emergent_world_parity_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_world_parity COMMAND emergent_world_parity_test)
+
+# ---------------------------------------------------------------------------
+# The material system and the geometry emitters
+# ---------------------------------------------------------------------------
+# The renderer draws real geometry with real materials, not debug boxes. These
+# two libraries are that world description in C++: the material table the
+# shader resolves an index through, and the detail kit that fills a facade with
+# windows, a cornice and roof plant. They depend on nothing upstream, so they
+# build and are tested on a machine with no Vulkan, no driver and no GPU.
+# The baked material table, generated from the bake descriptor and the packed
+# KTX2 maps. A build step rather than a committed file, so the table and the
+# textures it indexes can never disagree, and so a re-bake cannot leave a stale
+# header behind.
+#
+# Guarded on node: a machine without it still configures and builds, and
+# emergent_materials falls back to the untextured table. The alternative is a
+# build that cannot run before an asset pipeline, which is worse than a world
+# that is honestly grey.
+find_program(EMERGENT_NODE node)
+if(EMERGENT_NODE AND EXISTS "${CMAKE_SOURCE_DIR}/assets/textures/materials.mjs")
+  set(EMERGENT_BAKED_SIZE 512 CACHE STRING "Texture resolution the native bake is packed at")
+  # The three packs are declared outputs, not side effects. With only the header
+  # declared, the command went "up to date" the moment the header was newer than
+  # its sources -- so deleting 50 MB of KTX2 did not bring it back, and the
+  # renderer and its test ran against a directory that was simply gone. A build
+  # system cannot track what it is not told about.
+  set(EMERGENT_BAKED_PACKS
+    "${CMAKE_SOURCE_DIR}/build/native-assets/albedo.ktx2"
+    "${CMAKE_SOURCE_DIR}/build/native-assets/normal.ktx2"
+    "${CMAKE_SOURCE_DIR}/build/native-assets/arm.ktx2")
+  add_custom_command(
+    OUTPUT "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp" ${EMERGENT_BAKED_PACKS}
+    COMMAND "${EMERGENT_NODE}" "${CMAKE_SOURCE_DIR}/tools/assets/textures.mjs"
+            --size ${EMERGENT_BAKED_SIZE} --level 6
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/assets/textures.mjs"
+            "${CMAKE_SOURCE_DIR}/tools/assets/ktx2.mjs"
+            "${CMAKE_SOURCE_DIR}/tools/assets/png.mjs"
+            "${CMAKE_SOURCE_DIR}/assets/textures/materials.mjs"
+    COMMENT "Packing the CC0 bake into build/native-assets/*.ktx2"
+    VERBATIM)
+  add_custom_target(emergent_baked_materials
+    DEPENDS "${CMAKE_SOURCE_DIR}/assets/materials.gen.hpp" ${EMERGENT_BAKED_PACKS})
+endif()
+
+add_library(emergent_materials STATIC native/src/materials.cpp)
+target_include_directories(emergent_materials PUBLIC native/include)
+# The generated bake table lives beside the sources rather than in include/, so a
+# clean checkout without an asset build still configures.
+target_include_directories(emergent_materials PRIVATE assets)
+if(TARGET emergent_baked_materials)
+  add_dependencies(emergent_materials emergent_baked_materials)
+endif()
+set_target_properties(emergent_materials PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_materials PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_library(emergent_geometry STATIC native/src/geometry.cpp)
+target_include_directories(emergent_geometry PUBLIC native/include)
+target_link_libraries(emergent_geometry PUBLIC emergent_materials)
+set_target_properties(emergent_geometry PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_geometry PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_material_geometry_test native/tests/material_geometry_test.cpp)
+target_link_libraries(emergent_material_geometry_test PRIVATE emergent_geometry)
+if(UNIX)
+  target_compile_options(emergent_material_geometry_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_material_geometry COMMAND emergent_material_geometry_test)
+
+# The atmosphere is a CPU-side single-scattering sky (Preetham-style, with a
+# night model swapped in below the horizon). The renderer uploads its result
+# into an environment cubemap, but the model itself is pure maths, so it is
+# tested here rather than behind a GPU we may not have.
+add_library(emergent_atmosphere STATIC native/src/atmosphere.cpp)
+target_include_directories(emergent_atmosphere PUBLIC native/include)
+set_target_properties(emergent_atmosphere PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_atmosphere PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_atmosphere_test native/tests/atmosphere_test.cpp)
+target_link_libraries(emergent_atmosphere_test PRIVATE emergent_atmosphere)
+if(UNIX)
+  target_compile_options(emergent_atmosphere_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_atmosphere COMMAND emergent_atmosphere_test)
+
+# The KTX2 container reader. The renderer binds three sampler2DArray maps and
+# this is what fills them with the CC0 bake instead of neutral grey. It links
+# the libzstd the project already vendors rather than pulling in KTX-Software,
+# because reading a four-field header does not need a Basis transcoder.
+add_library(emergent_ktx2 STATIC native/src/ktx2.cpp)
+target_include_directories(emergent_ktx2 PUBLIC native/include)
+target_link_libraries(emergent_ktx2 PUBLIC libzstd_static)
+set_target_properties(emergent_ktx2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_ktx2 PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+# The reader, tested against a real KTX2 file committed to the tree and written
+# by the same writer the asset packer uses. The fixture is generated by
+# tools/assets/fixture.mjs; regenerate it rather than editing it.
+add_executable(emergent_ktx2_test native/tests/ktx2_test.cpp)
+target_link_libraries(emergent_ktx2_test PRIVATE emergent_ktx2)
+# Absolute paths, because ctest runs a test from the build directory and a
+# relative fixture path there fails to open. A test that cannot find its fixture
+# and reports success is worse than no test.
+target_compile_definitions(emergent_ktx2_test PRIVATE
+  EMERGENT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  EMERGENT_NATIVE_ASSET_DIR="${CMAKE_SOURCE_DIR}/build/native-assets")
+if(UNIX)
+  target_compile_options(emergent_ktx2_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+# The real-pack checks read build/native-assets, and they skip -- loudly, but
+# skip -- when it is absent. Without this dependency a build of this target alone
+# would run them against nothing and report success, which is the one outcome
+# worse than a failure.
+if(TARGET emergent_baked_materials)
+  add_dependencies(emergent_ktx2_test emergent_baked_materials)
+endif()
+add_test(NAME emergent_ktx2 COMMAND emergent_ktx2_test)
+
+# The world, assembled into the bytes the shader reads. This is the missing link
+# that let the renderer fall back to instanced unit cubes: nothing connected the
+# world generator to a vertex buffer, so the cube path worked and hid the fact
+# that it was not the game. It is plain CPU code with no Vulkan in it, so the
+# buffer invariants can be walked in CI on a machine with no graphics device.
+add_library(emergent_scene STATIC native/src/scene_mesh.cpp)
+target_include_directories(emergent_scene PUBLIC native/include)
+target_link_libraries(emergent_scene PUBLIC emergent_geometry emergent_world)
+set_target_properties(emergent_scene PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_scene PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_scene_mesh_test native/tests/scene_mesh_test.cpp)
+target_link_libraries(emergent_scene_mesh_test PRIVATE emergent_scene)
+if(UNIX)
+  target_compile_options(emergent_scene_mesh_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_scene_mesh COMMAND emergent_scene_mesh_test)
+
+# The render graph: resource bookkeeping, hazard derivation, sizing and pass
+# ordering, with no Vulkan in it. Ported from Granite's render_graph (MIT).
+#
+# It is a separate library from the renderer for a reason that is not tidiness:
+# this project has no GPU, so the binding layer can be written but never run.
+# Keeping the derivable part -- what a fraction of the swapchain resolves to,
+# which pass has to precede which, whether a resource may be transient -- on the
+# CPU means that part is checked by ctest on every build instead of being
+# asserted in a comment nobody reads.
+#
+# vulkan_render.cpp still does its own resource management. This is additive on
+# purpose: the graph is proven against its own tests before anything is rewired
+# to use it, so a mistake here cannot take the working scene path down with it.
+# ---------------------------------------------------------------------------
+# Adaptive visibility
+# ---------------------------------------------------------------------------
+# The hierarchical, temporally cached visibility field. Plain C++ with no Vulkan
+# in it, for the same reason the render graph is: the correctness of a reject
+# is the one thing in a renderer that must not be taken on trust, and on a
+# machine with no /dev/dri it can only be proved if it is reachable from a test.
+add_library(emergent_adaptive STATIC native/src/adaptive.cpp)
+target_include_directories(emergent_adaptive PUBLIC native/include)
+set_target_properties(emergent_adaptive PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_adaptive PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_adaptive_test native/tests/adaptive_test.cpp)
+target_link_libraries(emergent_adaptive_test PRIVATE emergent_adaptive)
+if(UNIX)
+  target_compile_options(emergent_adaptive_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_adaptive COMMAND emergent_adaptive_test)
+
+# The level-of-detail chain. meshoptimizer is already a vendored, pinned
+# dependency, so the simplifier here is the reference implementation rather
+# than a second one. Plain C++ with no Vulkan in it, for the same reason as
+# adaptive and render_graph: an error budget that is wrong does not crash, it
+# makes a city melt at 80 m, and that failure survives a screenshot review.
+add_library(emergent_lod STATIC native/src/lod.cpp)
+target_include_directories(emergent_lod PUBLIC native/include)
+target_link_libraries(emergent_lod PUBLIC meshoptimizer)
+set_target_properties(emergent_lod PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_lod PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_lod_test native/tests/lod_test.cpp)
+target_link_libraries(emergent_lod_test PRIVATE emergent_lod meshoptimizer)
+if(UNIX)
+  target_compile_options(emergent_lod_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_lod COMMAND emergent_lod_test)
+
+add_library(emergent_render_graph STATIC native/src/render_graph.cpp)
+target_include_directories(emergent_render_graph PUBLIC native/include)
+set_target_properties(emergent_render_graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_render_graph PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_render_graph_test native/tests/render_graph_test.cpp)
+target_link_libraries(emergent_render_graph_test PRIVATE emergent_render_graph)
+if(UNIX)
+  target_compile_options(emergent_render_graph_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_render_graph COMMAND emergent_render_graph_test)
+
+# ---------------------------------------------------------------------------
+# The Vulkan binding layer
+# ---------------------------------------------------------------------------
+#
+# The half of this that touches a Vk type. It is a separate library so the
+# translation tables -- format, usage, load/store ops, descriptor layout,
+# barrier planning -- are linked into a test that needs no device, while the
+# part that allocates VkImage and VkBuffer is only reachable on a machine that
+# has a driver. That split is the whole reason the graph was ported with its
+# own `Format` rather than using VkFormat.
+# The header includes <volk.h>, because the `vk*` entry points are resolved
+# through the loader at runtime and this is how the rest of the renderer reaches
+# Vulkan. Volk is optional in this project -- a Tracy-only configuration builds
+# with EMERGENT_BUILD_ENGINE=OFF and never fetches it -- so the whole binding
+# layer is conditional on it rather than half-configured.
+#
+# The skip is announced rather than silent. A target that quietly does not exist
+# is the same failure this file already records twice: ctest reports a missing
+# test executable as "Not Run" rather than as a failure, so an omission reads as
+# a pass. The default CI configuration has Volk and exercises both the test and
+# the negative controls, which is where the coverage lives.
+if(TARGET volk)
+  add_library(emergent_render_graph_vulkan STATIC native/src/render_graph_vulkan.cpp)
+  target_include_directories(emergent_render_graph_vulkan PUBLIC native/include)
+  target_link_libraries(emergent_render_graph_vulkan PUBLIC emergent_render_graph volk)
+  set_target_properties(emergent_render_graph_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(UNIX)
+    target_compile_options(emergent_render_graph_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+  endif()
+
+  add_executable(emergent_render_graph_vulkan_test native/tests/render_graph_vulkan_test.cpp)
+  target_link_libraries(emergent_render_graph_vulkan_test PRIVATE emergent_render_graph_vulkan)
+  if(UNIX)
+    target_compile_options(emergent_render_graph_vulkan_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME emergent_render_graph_vulkan COMMAND emergent_render_graph_vulkan_test)
+else()
+  message(STATUS
+    "Volk not configured: the render graph Vulkan binding layer and its test are "
+    "not built. The CPU-side graph is still built and tested.")
+endif()
 
 # ---------------------------------------------------------------------------
 # Shader compilation
@@ -459,7 +747,7 @@ add_executable(emergent_native
   native/src/audio.cpp
   native/src/vma_impl.cpp)
 target_include_directories(emergent_native PRIVATE native/include)
-target_link_libraries(emergent_native PRIVATE emergent_frame_loop emergent_render emergent_physics emergent_animation emergent_assets emergent_profiling meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation ozz_animation_offline libzstd_static)
+target_link_libraries(emergent_native PRIVATE emergent_frame_loop emergent_render emergent_physics emergent_animation emergent_assets emergent_profiling emergent_scene emergent_atmosphere emergent_ktx2 meshoptimizer RecastNavigation::Detour RecastNavigation::DetourCrowd volk GPUOpen::VulkanMemoryAllocator flecs::flecs_static miniaudio ozz_base ozz_animation ozz_animation_offline libzstd_static)
 if(EMERGENT_GLSLC)
   add_dependencies(emergent_native emergent_shaders)
 endif()
@@ -483,3 +771,44 @@ add_test(NAME emergent_native_benchmark_smoke COMMAND emergent_benchmark)
 # A loop that only works under a test harness is not a loop.
 add_test(NAME emergent_native_frame_loop COMMAND emergent_native --frames 300 --walk)
 add_test(NAME emergent_native_frame_loop_realtime COMMAND emergent_native --realtime 0.25 --walk)
+
+# The world, streamed all the way to the renderer, on a machine with no Vulkan
+# driver. The renderer used to draw instanced cubes because nothing connected the
+# world generator to a vertex buffer; this asserts that the connection is made
+# and that it produces a city, which is the part that can be checked without a
+# GPU. The pixels are not checked here and cannot be — see
+# docs/ENGINE_VERIFICATION.md.
+# Enough frames for the amortized build to finish. It needs 14 at the default
+# budget for this slice, and a test that runs 5 and asserts a finished mesh
+# would be asserting nothing at all.
+add_test(NAME emergent_native_scene_stream COMMAND emergent_native --scene 7 --frames 240)
+# The amortization itself. The point of the builder is that no single frame pays
+# for the whole slice, and a screenshot cannot show that -- a profile can, and so
+# can the number the binary prints. Asserting the mesh is still the full one
+# alongside it is the other half: a spread-out build that quietly drops geometry
+# would satisfy the first check alone.
+add_test(NAME emergent_native_scene_stream_is_amortized
+         COMMAND emergent_native --scene 7 --frames 240)
+set_tests_properties(emergent_native_scene_stream_is_amortized PROPERTIES
+  PASS_REGULAR_EXPRESSION
+    "Scene mesh: [1-9][0-9]+ vertices.*Scene build: ([2-9]|[1-9][0-9]+) frames")
+# The binary has to say where it is looking for the packed KTX2 maps. It used to
+# find them only by a path relative to the working directory, and find nothing,
+# and say nothing about it: a city with no materials looks like a material bug
+# rather than a missing file. Two tests, because the default and the override
+# fail in opposite directions.
+add_test(NAME emergent_native_asset_dir_default
+         COMMAND emergent_native --scene 7 --frames 1)
+set_tests_properties(emergent_native_asset_dir_default PROPERTIES
+  PASS_REGULAR_EXPRESSION "Material maps: .*native-assets")
+add_test(NAME emergent_native_asset_dir_override
+         COMMAND emergent_native --scene 7 --frames 1 --assets somewhere/else)
+set_tests_properties(emergent_native_asset_dir_override PROPERTIES
+  PASS_REGULAR_EXPRESSION "Material maps: somewhere/else")
+# Two conditions, because either alone is too weak. Requiring only a non-zero
+# vertex count passes even if every building fails to emit, since the ground,
+# the roads and the trees are still there — checked by deleting the building
+# mass and watching this test still pass. The buildings line is the one that
+# actually asserts a city was assembled.
+set_tests_properties(emergent_native_scene_stream PROPERTIES
+  PASS_REGULAR_EXPRESSION "Scene slice: [1-9][0-9]* buildings.*Scene mesh: [1-9][0-9]+ vertices")

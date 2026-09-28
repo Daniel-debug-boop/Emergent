@@ -1,5 +1,117 @@
 # CHANGELOG
 
+## 2026-09-27 — the native renderer stops being a debug box viewer
+
+The Vulkan backend drew `SceneBox`es: unit cubes, one per body, with a colour.
+It was honest about that — the shader said so in a comment — but it meant the
+native engine was not a renderer for this game, it was a viewer for one, and
+every screenshot of it was of test data rather than of EMERGENT. The world,
+the materials and the geometry now exist in C++ and the renderer consumes the
+same concepts the browser does.
+
+**The world is generated in C++, and it is provably the same world.**
+`world_gen.cpp` is a port of `world.mjs`, and the interesting part is not that
+it exists but that it is *exact*. Three properties make that possible: every
+hash is an integer operation (`Math.imul` maps to explicit 32-bit wrap rather
+than signed overflow, which is undefined behaviour and the optimiser is
+entitled to exploit it); the one float function involved, `hash2`, is a `sin`
+and is therefore quarantined in scattering, with terrain using an integer
+lattice hash exactly as the JavaScript already does; and the xorshift
+generator is the same 13/17/5 triple with the same wrap.
+
+`emergent_world_parity_test` checks that against a fixture generated from
+`world.mjs` and committed. **4,699 checks, 0 failures** — the same 3,077
+buildings, 672 roads, 50 districts, 1,961 trees and 707 businesses, with every
+sampled position agreeing to a micrometre. CI regenerates the fixture and fails
+if it has gone stale, so a change to the JavaScript world cannot silently leave
+the native one describing a city that no longer exists.
+
+**Four real bugs the parity test caught**, none of which a code review finds:
+
+- `occupied` held `&w.buildings.back()`. `w.buildings` is a vector and
+  reallocates, so every stored pointer was dangling from the next push. The
+  JavaScript holds object references and can never have this bug. It was a
+  use-after-free a few hundred buildings in, caught by AddressSanitizer, and
+  the test now runs clean.
+- The building loop's storey count is a ternary *followed by a separate `if`*
+  in the JavaScript, so an industrial district draws twice and throws the first
+  away. Collapsing it into `else if` consumed 1,174 fewer draws across the
+  city, which shifted every subsequent random and changed the tree count.
+- `rand() < 0.17 ? 'pine' : rand() < 0.12 ? ...` draws twice when the first
+  comparison fails. Reading it as one draw looked equivalent and was not.
+- The business record invented three colour draws that do not exist in the
+  reference and padded the rest — 3,682 extra draws, and 722 businesses instead
+  of 707.
+
+**Materials, in C++.** `materials.hpp`/`materials.cpp` are the same table the
+browser has: 26 baked materials plus 17 solid ones in one index space, two vec4
+uniform arrays, the same `MapMode` branches. The load-bearing values are tested
+directly — painted steel is metallic 0 because paint is an oxide, bare
+galvanised steel is metallic 1, and getting that backwards is the most common
+way a PBR scene ends up looking like plastic.
+
+**Geometry, in C++.** `geometry.hpp`/`geometry.cpp` are the detail kit:
+windows with reveals, frames and projecting sills; doors with steps; parapets;
+railings; roof plant; 8 m street lamps with arms over the carriageway; traffic
+lights; shipping containers at their real 6.06 x 2.44 x 2.59 m. Every emitter
+writes through one `MeshBuilder::vertex`, which aborts on a colour outside
+0..1 or a material index the table does not cover — a material index passed into
+a colour slot produces *finite* vertices that pass every NaN scan and draw as
+garbage, and that happened twice in the JavaScript kit before the choke point
+existed.
+
+`emergent_material_geometry_test` is **142 checks** with no GPU: every normal is
+unit length (an unnormalised cone normal is not a crash, it is a surface lit at
+up to 2.2x too bright), every material index resolves, and the proportions are
+checked against the only scale a player can verify — a 1.8 m person.
+
+**The shader is the same shader.** `scene_pbr.vert`/`scene_pbr.frag` are GLSL
+450 versions of the browser's PBR pair: the same GGX + Smith microfacet BRDF,
+the same dielectric/metal reflectance mix, the same hemispherical ambient, the
+same box mapping with a `MapMode::Uv` escape for imported meshes, and the same
+derivative-based tangent frame. Two shaders for one game is how the two halves
+quietly stop being the same game.
+
+**Textures come from 8k sources now.** `TIER_SOURCE_RESOLUTION` is 8k/4k/2k by
+tier, up from 2k/1k/1k, and the runtime tile is 1024 rather than 512 — four
+times the detail, 418 MB of VRAM with a complete mip chain, 70 MB on disk across
+78 tiles. 1024 is the last size where another texel changes anything: at 3 m a
+1024 tile is about half a 1080p screen, and 2048 would cost 1.6 GB for detail no
+viewpoint in this game resolves. Detail past that is bought with tiling density,
+which is free.
+
+**A harness bug that was hiding a real one.** The headless runtime reported
+every image as 512x512, so raising the bake size to 1024 was invisible to it and
+surfaced only as the game's own decode check failing with "decoded 512x512, the
+descriptor says 1024x1024" on all 78 tiles — an error naming the harness's lie
+as the cause. The harness now reads the real dimensions from each PNG's IHDR
+chunk. The same class of bug hid in `test_headless_game.mjs`, which had its own
+copy of the 512 literal; it now reads the descriptor the game itself imports.
+
+**And a build that did not link.** `emergent_frame_loop` named
+`emergent_animation` unconditionally, but that target only exists when an ozz
+tree is supplied — so any configuration without one failed with a bare
+`-lemergent_animation: No such file`, which is exactly the configuration whose
+whole purpose is to build the parts that need no third-party tree.
+
+**Verification, all run here:**
+
+| | result |
+|---|---|
+| `emergent_world_parity` | 4,699 checks, 0 failures |
+| `emergent_material_geometry` | 142 checks, 0 failures |
+| native `ctest` | 7/7 |
+| `npm test` | world 55, math 71, missions 445, geometry 34,888, shaders 111, shading 7,831, physics 71, input 189, tooling 7, runtime 15/15 at 20,937 — 0 failures |
+| `npm run assets:audit` | every asset CC0, sourced, referenced, present |
+
+**What is still not true.** The Vulkan render path has *still* never executed:
+there is no ICD and no `/dev/dri` here, so `vkCreateInstance` correctly returns
+`VK_ERROR_INCOMPATIBLE_DRIVER` and the backend reports that rather than
+fabricating GPU work. Everything in this entry is CPU-side work verified on this
+machine — the world, the materials, the geometry, the shader's *arithmetic* and
+its GLSL syntax. Not one pixel has been rasterised by this project. **FINAL
+HARDWARE VALIDATION REQUIRED.**
+
 ## 2026-09-27 — the city stops being boxes with better textures
 
 EMERGENT had no textures at all. The vertex format was position, normal and

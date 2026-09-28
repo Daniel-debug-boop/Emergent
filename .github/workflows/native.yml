@@ -77,16 +77,13 @@ jobs:
             -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
             -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
 
+      # Every target, not a list of them. The list was here to keep the job
+      # quick, and it cost this job twice: ctest reports a test whose executable
+      # was never built as "Not Run" rather than as a build failure, so a new
+      # test that nobody remembered to add to the list passed CI by not existing.
+      # Three of them did exactly that. `all` makes the omission impossible.
       - name: Build
-        run: |
-          cmake --build build/native --target \
-            emergent_native \
-            emergent_benchmark \
-            emergent_physics_test \
-            emergent_animation_test \
-            emergent_asset_pack_test \
-            emergent_profiling_test \
-            emergent_frame_loop_test
+        run: cmake --build build/native
 
       # No GPU is present on the runner, so the Vulkan backend reports
       # VK_ERROR_INCOMPATIBLE_DRIVER by design and the tests assert the
@@ -94,6 +91,27 @@ jobs:
       # link, which is what proves the VMA/volk/Flecs/Jolt integration.
       - name: Test
         run: ctest --test-dir build/native --output-on-failure
+
+      # The render graph's negative controls. Ten mutations of the implementation,
+      # each of which the test suite must catch, plus one cosmetic edit it must
+      # ignore. A suite nobody has ever seen fail is not evidence, and these are
+      # the assertions that would otherwise only be a claim in a commit message.
+      # The script restores the source it edits, so it is safe against a dirty
+      # tree, and it runs against a build that is already warm.
+      - name: Render graph negative controls
+        env:
+          EMERGENT_BUILD_DIR: ${{ github.workspace }}/build/native
+        run: bash tools/verify/render_graph_controls.sh
+
+      # The same discipline for the Vulkan binding layer. These are what prove
+      # the translation tables are translation tables and not plausible-looking
+      # constants -- a format that maps to the wrong VkFormat, or a usage bit
+      # copied across instead of translated, produces a frame that renders and
+      # is wrong.
+      - name: Render graph Vulkan binding negative controls
+        env:
+          EMERGENT_BUILD_DIR: ${{ github.workspace }}/build/native
+        run: bash tools/verify/render_graph_vulkan_controls.sh
 
       # The self-test writes a real profile; publishing it makes an
       # unmeasured subsystem visible instead of leaving it implied.
@@ -123,17 +141,11 @@ jobs:
             -DEMERGENT_OZZ_DIR="$PWD/third_party/ozz-animation" \
             -DEMERGENT_ZSTD_DIR="$PWD/third_party/zstd" \
             -DEMERGENT_TRACY_DIR="$PWD/third_party/tracy"
-          # Every test executable, not just the profiling one. emergent_profiling_test
-          # links emergent_animation, so the ozz libraries get built as a side effect
-          # of building it - but the other three test binaries are not dependencies
-          # of anything built here, and ctest reports a missing executable as
-          # "Not Run" rather than as a build failure.
-          cmake --build build/tracy --target \
-            emergent_physics_test \
-            emergent_asset_pack_test \
-            emergent_animation_test \
-            emergent_profiling_test \
-            emergent_frame_loop_test
+          # `all` rather than a list, for the reason in the Build step above: a
+          # named list omits new test executables silently, and ctest scores a
+          # missing executable as "Not Run" rather than as a failure. This
+          # configuration turns the engine off, so `all` is still a short build.
+          cmake --build build/tracy
           ctest --test-dir build/tracy --output-on-failure
 
       # The frame loop is the one subsystem whose bugs are invisible: a loop

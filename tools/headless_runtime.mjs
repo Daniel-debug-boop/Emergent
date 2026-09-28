@@ -21,6 +21,8 @@
  * the simulated frames only, exactly like the in-browser benchmark.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+
 // ---------------------------------------------------------------------------
 // WebGL2 stub
 // ---------------------------------------------------------------------------
@@ -596,7 +598,7 @@ function make2DContext() {
  * wrong size, the descriptor is what the game reads and the game is what fails,
  * so the harness only has to answer the question that is actually being asked.
  */
-function makeImage(width = 512, height = 512) {
+function makeImage(width, height) {
   return {
     naturalWidth: width,
     naturalHeight: height,
@@ -609,6 +611,62 @@ function makeImage(width = 512, height = 512) {
     addEventListener() {},
     removeEventListener() {}
   };
+}
+
+/**
+ * The real dimensions of a PNG, read from its IHDR chunk.
+ *
+ * The harness used to report every image as 512x512, which meant a bake that
+ * changed size was invisible here: the game uploaded 1024px tiles, the harness
+ * believed they were 512, and the mismatch only surfaced as the game's own
+ * decode check failing with "decoded 512x512, the descriptor says 1024x1024" --
+ * an error that named the harness's lie as the cause. Reading IHDR is eleven
+ * bytes at a fixed offset in the PNG spec, so this needs no image library and
+ * cannot itself be wrong about a non-PNG.
+ */
+function pngDimensions(buffer) {
+  // 8-byte signature, then an IHDR chunk: 4 length, 4 type, then width and
+  // height as two big-endian uint32s.
+  if (!buffer || buffer.length < 24) return null;
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < 8; i++) if (buffer[i] !== sig[i]) return null;
+  if (buffer[12] !== 0x49 || buffer[13] !== 0x48 || buffer[14] !== 0x44 || buffer[15] !== 0x52) return null;
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/**
+ * Look up a URL the harness is serving and read its PNG header.
+ *
+ * Synchronous on purpose: the Image stub is constructed and assigned in one
+ * expression, and making it async would mean the game's decode path resolved
+ * before the dimensions were known -- which is the race that let every image
+ * report the default size in the first place.
+ */
+/** Where the harness resolves relative asset URLs from. */
+const SERVE_ROOT = process.cwd();
+let pngSizeCache = new Map();
+function readPngSizeFor(url) {
+  if (pngSizeCache.has(url)) return pngSizeCache.get(url);
+  let dims = null;
+  try {
+    // The game hands the harness a path relative to the project root, e.g.
+    // `assets/textures/road_asphalt_albedo.png`. Stripping to a bare filename
+    // -- which is what this did first -- looks in the wrong directory and finds
+    // nothing, so every image silently kept the default size. Resolved relative
+    // to the serve root instead, with an absolute path or a URL's path both
+    // handled.
+    let rel = url.split('?')[0].split('#')[0];
+    rel = rel.replace(/^[a-z]+:\/\/[^/]+\//i, '');
+    if (rel.startsWith('/')) rel = rel.slice(1);
+    const candidate = `${SERVE_ROOT}/${rel}`;
+    if (existsSync(candidate)) dims = pngDimensions(readFileSync(candidate));
+  } catch {
+    // A file that is not there is the game's problem to report, not the
+    // harness's to throw over.
+    dims = null;
+  }
+  pngSizeCache.set(url, dims);
+  return dims;
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +859,28 @@ export function setupHeadless(options = {}) {
   // Images report the size the material descriptor declares, so the renderer's
   // upload path runs for real. `setImageSize` lets a test make the decoded size
   // disagree with the descriptor and assert that the renderer notices.
-  globalThis.Image = class { constructor() { return makeImage(imageSize.width, imageSize.height); } };
+  // An Image reports the real dimensions of whatever it loaded. Resolving the
+  // URL against the served root and reading the file is what makes the harness
+  // honest about texture size; without it every image is whatever the default
+  // says and a wrong-sized bake is undetectable here.
+  globalThis.Image = class {
+    constructor() {
+      const img = makeImage(imageSize.width, imageSize.height);
+      const self = this;
+      Object.defineProperty(img, 'src', {
+        get() { return self._src || ''; },
+        set(v) {
+          self._src = String(v);
+          const dims = readPngSizeFor(String(v));
+          if (dims) {
+            img.naturalWidth = img.width = dims.width;
+            img.naturalHeight = img.height = dims.height;
+          }
+        }
+      });
+      return img;
+    }
+  };
   return { document, location };
 }
 
@@ -845,6 +924,7 @@ export function resetHarness() {
   for (const key of Object.keys(globalListeners)) delete globalListeners[key];
   virtualNow = performance.now();
   imageSize = { width: 512, height: 512 };
+  pngSizeCache = new Map();
 }
 
 /**

@@ -80,6 +80,22 @@ struct RenderFrameStats {
     double gpuMs = 0.0;            // 0 unless a timestamp query was actually resolved
     bool hasDevice = false;
     bool hasSwapchain = false;
+    /**
+     * Triangles submitted by the scene pipeline, per frame.
+     *
+     * Separated from the debug-box count on purpose. "The renderer drew 1.2
+     * million triangles" and "the renderer drew 900 boxes and 1.2 million
+     * triangles" are very different claims, and averaging them into one number
+     * is how a debug renderer ends up reporting a convincing performance number
+     * for geometry that was never in the frame.
+     */
+    uint32_t drawnTriangles = 0;
+    /** Triangles submitted through the debug instance path. */
+    uint32_t drawnBoxes = 0;
+    /** False while the material maps hold neutral placeholders, not the CC0 bake. */
+    bool materialMapsLoaded = false;
+    /** Empty when the maps are real; otherwise why the scene is untextured. */
+    std::string materialMapNote;
     std::string status;
 };
 
