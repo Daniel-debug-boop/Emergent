@@ -561,6 +561,47 @@ add_test(NAME emergent_scene_mesh COMMAND emergent_scene_mesh_test)
 # vulkan_render.cpp still does its own resource management. This is additive on
 # purpose: the graph is proven against its own tests before anything is rewired
 # to use it, so a mistake here cannot take the working scene path down with it.
+# ---------------------------------------------------------------------------
+# Adaptive visibility
+# ---------------------------------------------------------------------------
+# The hierarchical, temporally cached visibility field. Plain C++ with no Vulkan
+# in it, for the same reason the render graph is: the correctness of a reject
+# is the one thing in a renderer that must not be taken on trust, and on a
+# machine with no /dev/dri it can only be proved if it is reachable from a test.
+add_library(emergent_adaptive STATIC native/src/adaptive.cpp)
+target_include_directories(emergent_adaptive PUBLIC native/include)
+set_target_properties(emergent_adaptive PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_adaptive PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_adaptive_test native/tests/adaptive_test.cpp)
+target_link_libraries(emergent_adaptive_test PRIVATE emergent_adaptive)
+if(UNIX)
+  target_compile_options(emergent_adaptive_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_adaptive COMMAND emergent_adaptive_test)
+
+# The level-of-detail chain. meshoptimizer is already a vendored, pinned
+# dependency, so the simplifier here is the reference implementation rather
+# than a second one. Plain C++ with no Vulkan in it, for the same reason as
+# adaptive and render_graph: an error budget that is wrong does not crash, it
+# makes a city melt at 80 m, and that failure survives a screenshot review.
+add_library(emergent_lod STATIC native/src/lod.cpp)
+target_include_directories(emergent_lod PUBLIC native/include)
+target_link_libraries(emergent_lod PUBLIC meshoptimizer)
+set_target_properties(emergent_lod PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(UNIX)
+  target_compile_options(emergent_lod PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+endif()
+
+add_executable(emergent_lod_test native/tests/lod_test.cpp)
+target_link_libraries(emergent_lod_test PRIVATE emergent_lod meshoptimizer)
+if(UNIX)
+  target_compile_options(emergent_lod_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME emergent_lod COMMAND emergent_lod_test)
+
 add_library(emergent_render_graph STATIC native/src/render_graph.cpp)
 target_include_directories(emergent_render_graph PUBLIC native/include)
 set_target_properties(emergent_render_graph PROPERTIES POSITION_INDEPENDENT_CODE ON)

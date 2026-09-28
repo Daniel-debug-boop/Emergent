@@ -1,47 +1,282 @@
 #version 450
-// EMERGENT experimental GPU-driven visibility + LOD pass.
-// The shader writes visibility flags and a compact LOD classification.
-// Actual VkDrawIndexedIndirectCommand generation is enabled by the native Vulkan path
-// only after buffers/pipeline barriers are available on the target device.
-layout(local_size_x = 64) in;
+// EMERGENT GPU-driven visibility and indirect draw generation.
+//
+// ## What replaced what
+//
+// The previous version of this file wrote a `Result { uint visible; uint lod; }`
+// per object and called that GPU culling. It was not: it tested a single
+// distance against `maxDistance`, ignored the frustum entirely, and produced
+// nothing a draw call could consume. The comment above it said so. This version
+// generates the draw commands themselves.
+//
+// ## The draw command layout
+//
+// `DrawCommand` is four uints, which is exactly `VkDrawIndirectCommand`:
+//     uint32_t vertexCount, instanceCount, firstVertex, firstInstance;
+// so the buffer this writes can be handed straight to `vkCmdDrawIndirect` or
+// `vkCmdDrawIndirectCount` with no repacking. The mesh is non-indexed -- the
+// scene assembler emits triangles directly and there is no index buffer -- so
+// the *non*-indexed draw is the correct one, and `vkCmdDrawIndirectCount` is
+// used with the counter in `Counters.visibleDraws`.
+//
+// ## The rule that governs every reject below
+//
+// A reject must be *provable*. A cluster is dropped only when its bounding
+// sphere is entirely outside a frustum plane, or when it is beyond the draw
+// distance, or when a **valid** normal cone is entirely outside a plane. The
+// cone test is skipped outright unless the cone was actually computed and is
+// tighter than a hemisphere; a missing cone falls back to the sphere test, not
+// to a guess. This mirrors `definitelyNotVisible` in `adaptive.cpp` exactly,
+// and the two are meant to be read side by side.
+//
+// ## Why the LOD is a data question, not a shader question
+//
+// The scene assembler currently emits one vertex range per cluster, so there is
+// no level 1 to draw. Rather than pretend otherwise, `LodRanges` carries up to
+// four (offset, count) pairs per cluster and the shader draws whichever level
+// it selected. Until the bake populates them the shader falls back to the base
+// range -- which is correct output, not a stub, and the moment the data exists
+// nothing here changes.
 
-struct Object {
-    vec4 bounds;       // xyz=center, w=radius
-    uint material;
-    uint lod;
-    float importance;
-    float pad;
+layout(local_size_x = 64, local_size_id = 1) in;
+
+// ---------------------------------------------------------------------------
+// Per-frame constants. A UBO rather than push constants because the frustum is
+// six planes and the guaranteed push-constant block is 128 bytes; a shader that
+// puts the frustum in push constants compiles on this device and fails to
+// create a pipeline on a stricter one.
+// ---------------------------------------------------------------------------
+// Structs are declared at file scope rather than inline inside their buffer
+// blocks. Both spellings are legal GLSL, but the project's shader test parses
+// with @shaderfrog/glsl-parser, which rejects the inline form -- and a shader
+// that cannot be parsed by the only GLSL checker in the build is a shader
+// nobody can check.
+struct DrawCommand {
+    uvec4 cmd;  // vertexCount, instanceCount, firstVertex, firstInstance
 };
 
-struct Result {
-    uint visible;
-    uint lod;
+struct ClusterRecord {
+    // 64 bytes, std430-friendly.
+    //  sphere: xyz centre, w radius
+    //  cone:   xyz axis, w cosAngle. -2 means "no cone"; <= 0 means unusable.
+    //  range:   x first vertex, y vertex count, z flags, w material index
+    //  meta:    x priority, y casts shadow, z two-sided, w cluster id
+    vec4 sphere;
+    vec4 cone;
+    uvec4 range;
+    vec4 meta;
 };
 
-layout(std430, binding=0) readonly buffer Objects { Object objects[]; };
-layout(std430, binding=1) writeonly buffer Results { Result results[]; };
+struct Counters {
+    uint visibleDraws;   // consumed by vkCmdDrawIndirectCount
+    uint rejected;       // proved invisible this frame
+    uint lodTransitions; // clusters whose selected level changed
+    uint coneRejected;   // of `rejected`, how many the cone test alone caught
+};
+
+layout(std140, binding = 0) uniform Frame {
+    mat4 viewProjection;   //  64
+    vec4 cameraPos;        //  16  xyz camera, w = draw distance
+    vec4 frustumPlanes[6]; //  96  normalized, inside on the positive side
+    vec4 lodParams;        //  16  x = lod error in pixels, y = hysteresis,
+                           //      z = focal length in pixels, w = unused
+};
+
+layout(std430, binding = 1) readonly buffer Clusters { ClusterRecord clusters[]; };
+
+layout(std430, binding = 2) readonly buffer LodRanges {
+    // Four levels per cluster. A zero count means that level is not present in
+    // the baked mesh, and the shader falls back to the base range rather than
+    // issuing a zero-vertex draw that would still cost a draw call slot.
+    uvec2 lodRanges[];
+};
+
+layout(std430, binding = 3) writeonly buffer Draws { DrawCommand draws[]; };
+
+layout(std430, binding = 4) buffer Counters { Counters counters; };
+
+layout(std430, binding = 5) writeonly buffer Debug {
+    // Per cluster, for the debug visualisation. One uint per cluster, packed:
+    //   bit 0     visible this frame
+    //   bit 1     rejected by the sphere/frustum test
+    //   bit 2     rejected by the cone test
+    //   bits 4-5  selected LOD
+    //   bit 6     two-sided (cone test not applicable)
+    //   bit 7     no usable cone
+    uint clusterDebug[];
+};
 
 layout(push_constant) uniform Params {
-    vec4 cameraPos;
-    float maxDistance;
-    uint objectCount;
-    float lodNear;
-    float lodMid;
+    uint clusterCount;   // how many clusters to process
+    uint maxDraws;       // capacity of `draws`, must match the host allocation
+    uint enableCone;     // 0 disables the cone test entirely
+    uint frameIndex;
 } params;
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/**
+ * True only when the sphere is provably outside the frustum.
+ *
+ * A sphere that straddles a plane counts as inside. That is the conservative
+ * direction: it can cost a redundant draw, never a missing one.
+ */
+bool sphereOutsideFrustum(vec3 centre, float radius) {
+    for (int i = 0; i < 6; ++i) {
+        vec4 plane = frustumPlanes[i];
+        if (dot(vec3(plane.xyz), centre) + plane.w >= -radius) {
+            return false;  // this plane still sees part of the sphere
+        }
+    }
+    return true;
+}
+
+/**
+ * True only when a *valid* cone is provably back-facing.
+ *
+ * A bounding sphere has no facing, so the frustum test above cannot tell the
+ * back of a building from its front. A cone can. This is the test meshoptimizer
+ * uses, and meshoptimizer is already a dependency of this project:
+ *
+ *     visible  <=>  dot(axis, normalize(centre - eye)) <= sin(angle)
+ *
+ * `centre - eye` points away from the camera while the axis follows the surface
+ * normal, so a wall looking at the camera gives a dot near -1 and a wall turned
+ * away gives a dot near +1. Rejecting when it exceeds `sin(angle)` therefore
+ * rejects exactly the back-facing case. The sign matters: inverted, this culls
+ * the walls that are looking at you.
+ *
+ * Note what this is NOT: it is not a per-frustum-plane support test. The support
+ * form, `dot(n, centre) + d + radius * sin(angle) < 0`, is dead code, because
+ * `radius * sin(angle)` never exceeds `radius` and the sphere test has already
+ * rejected everything it could reach. That mistake was made on the CPU side
+ * first and is recorded here so the two implementations do not diverge.
+ */
+bool coneBackFacing(vec3 centre, vec3 axis, float cosAngle) {
+    vec3 toCluster = centre - cameraPos.xyz;
+    float d = length(toCluster);
+    if (d < 1e-4) return false;  // at the eye: facing is undefined, keep it
+    float sinAngle = sqrt(max(0.0, 1.0 - cosAngle * cosAngle));
+    return dot(toCluster / d, axis) > sinAngle;
+}
+
+/** Cluster flag bits, mirrored from `ClusterFlags` in adaptive.hpp. */
+const uint FLAG_TWO_SIDED = 1u;
+const uint FLAG_CASTS_SHADOW = 2u;
+
+/**
+ * Select a LOD from projected screen-space error, with hysteresis.
+ *
+ * Mirrors `lodFor` on the CPU: the coarser a level may be the further away the
+ * cluster is, and the switch back to a finer level needs stronger evidence than
+ * the switch away from it, because switching back late is a visible pop and
+ * switching away early is only a wasted triangle.
+ */
+uint selectLod(float errorPixels, uint previousLod) {
+    float limit = max(lodParams.x, 1e-3);
+    uint lod = 0u;
+    if (errorPixels > limit) lod = 1u;
+    if (errorPixels > limit * 4.0) lod = 2u;
+    if (errorPixels > limit * 16.0) lod = 3u;
+
+    if (previousLod > lod) {
+        // Divides, not multiplies: the factor has to *lower* the error needed
+        // to step to a finer level, or the condition is true everywhere it
+        // applies and the block changes nothing. Matches `lodFor` in
+        // adaptive.cpp.
+        float riseLimit = limit * pow(4.0, float(previousLod - 1u)) / max(lodParams.y, 1.0001);
+        if (errorPixels < riseLimit) lod = previousLod;
+    }
+    return lod;
+}
+
 void main() {
-    uint i = gl_GlobalInvocationID.x;
-    if (i >= params.objectCount) return;
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= params.clusterCount) return;
 
-    Object o = objects[i];
-    float d = distance(o.bounds.xyz, params.cameraPos.xyz);
-    bool visible = d - o.bounds.w <= params.maxDistance;
+    vec4 sphere = clusters[index].sphere;
+    vec4 cone = clusters[index].cone;
+    uvec4 range = clusters[index].range;
+    vec4 meta = clusters[index].meta;
 
-    uint lod = 3u;
-    if (d <= params.lodNear) lod = 0u;
-    else if (d <= params.lodMid) lod = 1u;
-    else if (d <= params.maxDistance) lod = 2u;
+    uint flags = range.z;
+    float radius = sphere.w;
+    vec3 centre = sphere.xyz;
 
-    results[i].visible = visible ? 1u : 0u;
-    results[i].lod = lod;
+    uint dbg = 0u;
+    if ((flags & FLAG_TWO_SIDED) != 0u) dbg |= 64u;
+
+    // -- spatial reject --------------------------------------------------
+    bool outside = sphereOutsideFrustum(centre, radius);
+
+    // Explicit radial cut. The far plane usually covers this, but a generous
+    // far plane means the loop above passes everything the distance rule would
+    // drop, and this loop is six dot products against one subtraction.
+    float dist = distance(centre, cameraPos.xyz);
+    if (dist - radius > cameraPos.w) outside = true;
+
+    // -- cone reject, only when a cone exists and is usable ---------------
+    // Three separate gates, and all three must pass. A cluster with no cone
+    // (cosAngle == -2), a cluster whose cone spans a hemisphere or more
+    // (cosAngle <= 0), and a two-sided cluster are all cases where the test
+    // would be unsound, so all three fall through to "keep it".
+    bool coneUsable = params.enableCone != 0u
+                   && cone.w > 0.0
+                   && (flags & FLAG_TWO_SIDED) == 0u;
+    if (coneUsable && !outside) {
+        if (coneBackFacing(centre, cone.xyz, cone.w)) {
+            outside = true;
+            dbg |= 4u;
+            atomicAdd(counters.coneRejected, 1u);
+        }
+    } else {
+        dbg |= 128u;  // no usable cone: recorded so the debug view can say why
+    }
+
+    if (outside) {
+        dbg |= 2u;
+        atomicAdd(counters.rejected, 1u);
+        clusterDebug[index] = dbg;
+        return;
+    }
+
+    // -- LOD -------------------------------------------------------------
+    // Projected error: the focal length in pixels, times the cluster's radius,
+    // over its distance. The host supplies the focal length so this is the same
+    // number the CPU path uses -- `viewHeightPx / (2 tan(fovY/2))` -- and a
+    // cluster that migrates between the two paths does not change level at the
+    // boundary. Hard-coding a focal length here would put the GPU and CPU LOD
+    // thresholds in different places, which is the kind of disagreement that
+    // only shows up as geometry popping at one specific distance.
+    float focal = max(lodParams.z, 1e-3);
+    float errorPixels = (radius * focal) / max(dist, 1e-3);
+    uint lod = selectLod(errorPixels, range.z >> 8u);
+    dbg |= (lod & 3u) << 4u;
+    if ((range.z >> 8u) != lod) atomicAdd(counters.lodTransitions, 1u);
+
+    // -- emit the draw command -------------------------------------------
+    uint vertexCount = range.y;
+    uint firstVertex = range.x;
+    if (lod > 0u) {
+        uvec2 alt = lodRanges[index * 4u + lod];
+        if (alt.y != 0u) {
+            vertexCount = alt.y;
+            firstVertex = alt.x;
+        }
+        // else: the baked mesh has no level `lod`; drawing the base range is
+        // correct output, and skipping the draw would silently delete geometry.
+    }
+
+    // Bounded append. Without the capacity check a corrupt count would have the
+    // compute pass writing past the end of the draw buffer, which is a
+    // device-side fault rather than a wrong frame.
+    uint slot = atomicAdd(counters.visibleDraws, 1u);
+    if (slot < params.maxDraws) {
+        draws[slot].cmd = uvec4(vertexCount, 1u, firstVertex, 0u);
+        dbg |= 1u;
+    }
+
+    clusterDebug[index] = dbg;
 }
